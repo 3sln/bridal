@@ -9,6 +9,9 @@
 // The rest of the app only sees this surface (start/write/interrupt/…/events),
 // never how the process is made or which agent it is.
 
+import { writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { VOICE_PRIMER } from './agents.js';
 
 export class AgentRunner extends EventTarget {
@@ -24,6 +27,27 @@ export class AgentRunner extends EventTarget {
     this.busy = false;
     this.sessionId = null;
     this.first = true;
+    this.mcpUrl = null;
+    this.mcpConfigPath = null;
+    this.mcpReady = false;
+  }
+
+  /** Point the agent at bridle's MCP server (profiles that support it inject it). */
+  setMcp({ url } = {}) {
+    this.mcpUrl = url || null;
+    this.mcpReady = false;
+  }
+
+  async #mcpArgs() {
+    if (!this.mcpUrl || !this.profile.mcp) return [];
+    if (!this.mcpReady) {
+      this.mcpConfigPath = join(tmpdir(), `bridle-mcp-${process.pid}.json`);
+      if (this.profile.mcpConfig) {
+        await writeFile(this.mcpConfigPath, JSON.stringify(this.profile.mcpConfig(this.mcpUrl)));
+      }
+      this.mcpReady = true;
+    }
+    return this.profile.mcp({ url: this.mcpUrl, configPath: this.mcpConfigPath });
   }
 
   get isPipe() {
@@ -166,9 +190,10 @@ export class AgentRunner extends EventTarget {
     this.busy = true;
     const { args, stdinFromNull } = this.profile.turn({ prompt, first: this.first, sessionId: this.sessionId });
     this.first = false;
+    const mcpArgs = await this.#mcpArgs();
     let proc;
     try {
-      proc = Bun.spawn([...this.profile.command, ...args], {
+      proc = Bun.spawn([...this.profile.command, ...mcpArgs, ...args], {
         cwd: this.cwd,
         env: this.env,
         stdin: stdinFromNull ? 'ignore' : 'pipe',

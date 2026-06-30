@@ -44,6 +44,9 @@ const PROFILES = {
       stdinFromNull: true,
     }),
     listSessions: (cwd) => claudeSessions(cwd),
+    // Auto-wire bridle's MCP server so the agent can drive the phone front-end.
+    mcpConfig: (url) => ({ mcpServers: { bridle: { type: 'http', url } } }),
+    mcp: ({ configPath }) => ['--mcp-config', configPath, '--allowedTools', 'mcp__bridle__*'],
     streamStderr: false,
   },
 

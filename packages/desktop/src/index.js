@@ -13,6 +13,7 @@ import {
   PeerProvider,
   RegistryProvider,
   ServiceProvider,
+  FrontendProvider,
 } from './providers.js';
 import { SetupsQuery, RemoveSetupAction, InstallSetupAction } from './bl/setups.js';
 import { getSetup, envFileFor } from './registry.js';
@@ -31,6 +32,7 @@ function buildEngine(config) {
       peer: PeerProvider,
       registry: RegistryProvider,
       service: ServiceProvider,
+      frontend: FrontendProvider,
     },
   });
 }

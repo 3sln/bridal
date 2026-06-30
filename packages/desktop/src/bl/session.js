@@ -27,6 +27,7 @@ import {
   session as mkSession,
 } from '@bridle/protocol/link';
 import { answer as mkAnswer } from '@bridle/protocol/signaling';
+import { McpServer } from '../mcp.js';
 
 export const PHASE = Object.freeze({
   STARTING: 'starting',
@@ -38,10 +39,24 @@ export const PHASE = Object.freeze({
 });
 
 export class SessionQuery extends Query {
-  static deps = ['config', 'agent', 'signaling', 'peer'];
+  static deps = ['config', 'agent', 'signaling', 'peer', 'frontend'];
 
-  async boot({ config, agent, signaling, peer: makePeer }, { notify, engineFeed }) {
+  async boot({ config, agent, signaling, peer: makePeer, frontend }, { notify, engineFeed }) {
     const echo = (type, detail) => engineFeed.dispatchEvent(new CustomEvent(type, { detail }));
+
+    // MCP server: lets the agent drive the phone front-end (audio/images/ask/…).
+    let mcp = null;
+    if (config.mcp.enabled && agent.profile?.mcp) {
+      mcp = new McpServer({ controller: frontend, port: config.mcp.port });
+      try {
+        mcp.start();
+        agent.setMcp({ url: mcp.url });
+        echo('mcp-up', { url: mcp.url });
+      } catch (err) {
+        echo('agent-output', { text: `\n[bridle] MCP server failed to start: ${err.message}\n`, stream: 'stderr' });
+        mcp = null;
+      }
+    }
 
     const state = {
       phase: PHASE.STARTING,
@@ -104,6 +119,7 @@ export class SessionQuery extends Query {
     // --- per-connection peer ------------------------------------------------
     function teardownPeer() {
       for (const off of peerCleanups.splice(0)) off();
+      frontend.detach();
       if (peer) {
         try {
           peer.close();
@@ -128,6 +144,7 @@ export class SessionQuery extends Query {
           outBuffer = '';
         }
         push({ phase: PHASE.TETHERED });
+        frontend.attach(peer); // the agent's MCP tools now reach this phone
         // Default: resume the latest session they had going; inject the primer.
         attachSession(undefined);
       });
@@ -179,6 +196,9 @@ export class SessionQuery extends Query {
           if (msg.id) attachSession(msg.id);
           else agent.beginSession({});
           break;
+        case LINK.ASK_REPLY:
+          frontend.resolveAsk(msg.id, msg.answer);
+          break;
         case LINK.PING:
           peer?.send(pong(msg.ts));
           break;
@@ -206,6 +226,7 @@ export class SessionQuery extends Query {
       teardownPeer();
       signaling.close();
       agent.kill();
+      mcp?.stop();
     };
   }
 }

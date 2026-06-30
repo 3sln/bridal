@@ -99,6 +99,14 @@ export class HostPeer extends EventTarget {
     return false;
   }
 
+  sendBinary(buf) {
+    if (this.channel && this.channel.readyState === 'open') {
+      this.channel.send(Buffer.isBuffer(buf) ? buf : Buffer.from(buf));
+      return true;
+    }
+    return false;
+  }
+
   close() {
     try {
       this.channel?.close?.();

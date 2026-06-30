@@ -14,6 +14,7 @@ export function runSession(engine, config, { ui } = {}) {
     if (ui) {
       engine.feed.addEventListener('agent-output', (e) => ui.agentOutput(e.detail));
       engine.feed.addEventListener('guest-input', (e) => ui.guestInput(e.detail));
+      engine.feed.addEventListener('mcp-up', (e) => ui.note(`agent front-end tools (MCP) at ${e.detail.url}`));
     }
 
     const handle = engine.query(new SessionQuery());

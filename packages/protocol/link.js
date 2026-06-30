@@ -7,10 +7,12 @@
 // browser's speech synthesis, so NO audio ever crosses this channel and the
 // desktop holds no API keys. Only text + control flow travels here:
 //
-//   guest -> host : TEXT (transcribed or typed) and COMMAND (agent control)
-//   host  -> guest: OUTPUT (agent stdout) and STATUS (lifecycle)
+//   guest -> host : TEXT (transcribed or typed), COMMAND, session + ask replies
+//   host  -> guest: OUTPUT/STATUS, session info, and front-end control (speak,
+//                   markdown, ask, asset transfer) driven by the agent's MCP tools
 //
-// Every frame is a JSON string; there are no binary frames.
+// String frames are JSON control messages. Binary frames are asset bytes (audio/
+// image/file) belonging to the asset announced by the most recent ASSET_BEGIN.
 
 export const PROTO_VERSION = 1;
 
@@ -26,13 +28,24 @@ export const LINK = Object.freeze({
   COMMAND: 'command', // { t, name, arg? }  control affecting the host
   LIST_SESSIONS: 'list-sessions', // { t }          request the agent's sessions
   CONNECT_SESSION: 'connect-session', // { t, id }  attach (id) or start fresh (null)
+  ASK_REPLY: 'ask-reply', // { t, id, answer }      response to an ASK prompt
 
   // host (desktop) -> guest (phone)
   OUTPUT: 'output', // { t, text, stream }   agent stdout/stderr chunk
   STATUS: 'status', // { t, state, code? }   agent lifecycle
   SESSIONS: 'sessions', // { t, sessions, currentId }  list of resumable sessions
   SESSION: 'session', // { t, id, title, resumed }     active session changed
+
+  // host -> guest: front-end control (driven by the agent via MCP tools)
+  SPEAK: 'speak', // { t, text }              say something via TTS
+  MARKDOWN: 'markdown', // { t, title, markdown }  render a card
+  STATUSLINE: 'status-line', // { t, text }   set a transient status line
+  ASK: 'ask', // { t, id, question, choices }  prompt the user; expects ASK_REPLY
+  ASSET_BEGIN: 'asset-begin', // { t, id, kind, name, mime, size, meta }
+  ASSET_END: 'asset-end', // { t, id }         binary chunks arrive between begin/end
 });
+
+export const ASSET = Object.freeze({ AUDIO: 'audio', IMAGE: 'image', FILE: 'file' });
 
 export const STREAM = Object.freeze({ STDOUT: 'stdout', STDERR: 'stderr' });
 export const AGENT_STATE = Object.freeze({
@@ -81,6 +94,15 @@ export const output = (s, stream = STREAM.STDOUT) => ({ t: LINK.OUTPUT, text: s,
 export const status = (state, code) => ({ t: LINK.STATUS, state, code });
 export const sessions = (list, currentId) => ({ t: LINK.SESSIONS, sessions: list, currentId });
 export const session = (id, title, resumed) => ({ t: LINK.SESSION, id, title, resumed });
+
+// front-end control
+export const speak = (s) => ({ t: LINK.SPEAK, text: s });
+export const markdown = (md, title) => ({ t: LINK.MARKDOWN, markdown: md, title });
+export const statusLine = (s) => ({ t: LINK.STATUSLINE, text: s });
+export const ask = (id, question, choices) => ({ t: LINK.ASK, id, question, choices: choices || null });
+export const askReply = (id, answer) => ({ t: LINK.ASK_REPLY, id, answer });
+export const assetBegin = (id, kind, name, mime, size, meta) => ({ t: LINK.ASSET_BEGIN, id, kind, name, mime, size, meta: meta || {} });
+export const assetEnd = (id) => ({ t: LINK.ASSET_END, id });
 
 // ---- (de)serialization ------------------------------------------------------
 

@@ -15,6 +15,7 @@ import {
   command as mkCommand,
   listSessions as mkListSessions,
   connectSession as mkConnectSession,
+  askReply as mkAskReply,
 } from '@bridle/protocol/link';
 import { offer as mkOffer } from '@bridle/protocol/signaling';
 import { parse as parseCommand, CMD } from './commands.js';
@@ -34,6 +35,21 @@ const lastBoundary = (s) => {
   const m = s.match(/[\s\S]*[.!?\n]/);
   return m ? m[0].length : 0;
 };
+
+const ORDINAL = { one: 1, two: 2, three: 3, four: 4, five: 5, first: 1, second: 2, third: 3, fourth: 4, fifth: 5 };
+// Map a spoken answer onto one of the offered choices (exact / contains / ordinal).
+function resolveChoice(text, choices) {
+  const t = (text || '').trim();
+  if (!choices || !choices.length) return t;
+  const low = t.toLowerCase().replace(/[.,!?]$/g, '');
+  const exact = choices.find((c) => c.toLowerCase() === low);
+  if (exact) return exact;
+  const part = choices.find((c) => low.includes(c.toLowerCase()) || c.toLowerCase().includes(low));
+  if (part) return part;
+  const n = /^\d+$/.test(low) ? parseInt(low, 10) : ORDINAL[low];
+  if (n && choices[n - 1]) return choices[n - 1];
+  return t;
+}
 
 export class TetherQuery extends Query {
   static deps = ['config', 'settings', 'signaling', 'peer', 'mic', 'tts', 'stt'];
@@ -60,6 +76,9 @@ export class TetherQuery extends Query {
       sessions: [], // resumable agent sessions (when listed)
       currentSession: null, // { id, title }
       sessionsOpen: false,
+      statusLine: '', // transient agent status (set_status)
+      toast: null, // { text, level } notice
+      ask: null, // { id, question, choices } pending prompt
     };
     const refreshSettings = () => {
       state.settings = settings.all();
@@ -73,13 +92,14 @@ export class TetherQuery extends Query {
 
     let peer = null;
     let speakBuffer = '';
+    let incomingAsset = null; // asset being received (between ASSET_BEGIN/END)
     let flushTimer = null;
     let lastLevelNotify = 0;
 
     // --- messages -----------------------------------------------------------
-    const addMessage = (role, content, kind) => {
+    const addMessage = (role, content, kind, extra) => {
       if (role === 'user') markAssistantDone();
-      state.messages.push({ id: `${nonce}-${state.messages.length}`, role, content, kind, ts: Date.now() });
+      state.messages.push({ id: `${nonce}-${state.messages.length}`, role, content, kind, ts: Date.now(), ...extra });
       notifyNow();
     };
     const appendAssistant = (chunk) => {
@@ -172,6 +192,7 @@ export class TetherQuery extends Query {
       peer = makePeer();
       peer.addEventListener('open', onPeerOpen);
       peer.addEventListener('message', (e) => handleLink(e.detail.msg));
+      peer.addEventListener('binary', (e) => onBinary(e.detail.chunk));
       peer.addEventListener('closed', () => push({ connection: CONNECTION.WAITING }));
       peer.addEventListener('state', (e) => {
         if (e.detail.state === 'failed' || e.detail.state === 'disconnected') {
@@ -236,9 +257,63 @@ export class TetherQuery extends Query {
           push({ currentSession: { id: msg.id, title: msg.title }, sessionsOpen: false });
           addMessage('system', msg.resumed ? `resumed ${msg.title}` : 'new session', 'status');
           break;
+
+        // --- front-end control (agent MCP tools) ---
+        case LINK.SPEAK:
+          tts.speak(msg.text);
+          break;
+        case LINK.STATUSLINE:
+          push({ statusLine: msg.text || '' });
+          break;
+        case LINK.NOTICE:
+          showToast(msg.text, msg.level);
+          break;
+        case LINK.MARKDOWN:
+          markAssistantDone();
+          addMessage('assistant', msg.markdown, 'markdown', { title: msg.title });
+          break;
+        case LINK.ASK:
+          push({ ask: { id: msg.id, question: msg.question, choices: msg.choices } });
+          if (settings.get('autoSpeak')) tts.speak(msg.question, { remember: false });
+          break;
+        case LINK.ASSET_BEGIN:
+          incomingAsset = { ...msg, chunks: [], received: 0 };
+          break;
+        case LINK.ASSET_END:
+          finishAsset(msg.id);
+          break;
         default:
           break;
       }
+    }
+
+    function onBinary(chunk) {
+      if (incomingAsset) {
+        incomingAsset.chunks.push(chunk);
+        incomingAsset.received += chunk.byteLength || 0;
+      }
+    }
+
+    function finishAsset(id) {
+      const a = incomingAsset;
+      incomingAsset = null;
+      if (!a || a.id !== id || !a.chunks.length) return;
+      const blob = new Blob(a.chunks, { type: a.mime || 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      markAssistantDone();
+      addMessage('assistant', (a.meta && a.meta.caption) || a.name || '', a.kind, {
+        url,
+        name: a.name,
+        mime: a.mime,
+        autoplay: a.kind === 'audio' && (!a.meta || a.meta.autoplay !== false),
+      });
+    }
+
+    let toastTimer = null;
+    function showToast(text, level = 'info') {
+      push({ toast: { text, level } });
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => push({ toast: null }), 5000);
     }
 
     const findSession = (list, id) => (list || []).find((s) => s.id === id) || (id ? { id, title: 'current' } : null);
@@ -251,10 +326,20 @@ export class TetherQuery extends Query {
       if (cmd) {
         addMessage('user', heard, 'command');
         runCommand(cmd);
+      } else if (state.ask) {
+        // A question is pending — this speech is the answer.
+        answerAsk(resolveChoice(heard, state.ask.choices));
       } else {
         addMessage('user', heard);
         peer?.send(mkText(heard));
       }
+    }
+
+    function answerAsk(answer) {
+      if (!state.ask) return;
+      peer?.send(mkAskReply(state.ask.id, answer));
+      addMessage('user', answer, 'answer');
+      push({ ask: null });
     }
 
     function runCommand(cmd) {
@@ -350,8 +435,14 @@ export class TetherQuery extends Query {
       switch (it.type) {
         case 'send-text':
           if (it.text && it.text.trim()) {
-            addMessage('user', it.text);
-            peer?.send(mkText(it.text));
+            if (state.ask) {
+              peer?.send(mkAskReply(state.ask.id, it.text));
+              addMessage('user', it.text, 'answer');
+              push({ ask: null });
+            } else {
+              addMessage('user', it.text);
+              peer?.send(mkText(it.text));
+            }
           }
           break;
         case 'toggle-conversation':
@@ -399,6 +490,13 @@ export class TetherQuery extends Query {
           break;
         case 'set-sessions-sheet':
           push({ sessionsOpen: !!it.open });
+          break;
+        case 'answer-ask':
+          if (state.ask) {
+            peer?.send(mkAskReply(state.ask.id, it.answer));
+            addMessage('user', it.answer, 'answer');
+            push({ ask: null });
+          }
           break;
         default:
           break;
@@ -491,6 +589,15 @@ export class ConnectSessionAction extends Action {
 }
 export class CloseSessionsAction extends IntentOnly {
   intent = { type: 'set-sessions-sheet', open: false };
+}
+export class AnswerAskAction extends Action {
+  constructor(answer) {
+    super();
+    this.answer = answer;
+  }
+  execute(_, { engineFeed }) {
+    emit(engineFeed, { type: 'answer-ask', answer: this.answer });
+  }
 }
 
 export class SetSettingAction extends Action {

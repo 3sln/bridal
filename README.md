@@ -101,6 +101,33 @@ Switch sessions hands-free: say **"bridle sessions"** to hear/see the list, then
 Sessions are read from each tool's own store (`~/.claude/projects/…`,
 `~/.codex/sessions/…`).
 
+## Front-end control (the agent drives the phone)
+
+Bridle runs a small **MCP server in-process** and auto-wires the agent to it (for
+Claude: `--mcp-config` + `--allowedTools "mcp__bridle__*"`). Because it shares the
+process with the live WebRTC link, a tool call reaches the phone directly — so the
+agent can do more than talk:
+
+| Tool | Effect on the phone |
+| --- | --- |
+| `play_audio(path\|url)` | send an audio file and play it |
+| `show_image(path\|url)` | display an image |
+| `show_file(path\|url)` | offer a file (download/preview) |
+| `show_markdown(md)` | render a card (lists, links, tables) |
+| `speak(text)` | say something via TTS |
+| `notify(text)` | toast |
+| `set_status(text)` | transient status line |
+| `ask(question, choices?)` | prompt the user and **block for their spoken/tapped answer** |
+
+So "read me my last voicemail" can have the agent transcribe it *and* `play_audio`
+the clip; "which of these should I merge?" can `ask` with choices you answer by
+voice. Files stream peer-to-peer over the data channel (no backend, no upload).
+The MCP server binds to `127.0.0.1` only; disable with `--no-mcp`.
+
+It's a minimal Streamable-HTTP MCP server (`packages/desktop/src/mcp.js`), so any
+MCP-capable agent can use it — Claude is auto-configured; point others at the URL
+bridle prints (`http://127.0.0.1:<port>/mcp`).
+
 ## Repo layout
 
 ```

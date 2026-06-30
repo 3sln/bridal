@@ -14,6 +14,7 @@ export class GuestPeer extends EventTarget {
     super();
     this.pc = new RTCPeerConnection(iceConfig({ iceServers }));
     this.channel = this.pc.createDataChannel('bridle', { ordered: true });
+    this.channel.binaryType = 'arraybuffer';
     this.#wire();
   }
 
@@ -27,8 +28,10 @@ export class GuestPeer extends EventTarget {
         } catch (err) {
           this.emit('error', { message: `bad link frame: ${err.message}` });
         }
+      } else {
+        // Binary frame = asset bytes for the currently-open ASSET_BEGIN.
+        this.emit('binary', { chunk: e.data });
       }
-      // Phone never receives binary frames.
     };
     this.pc.oniceconnectionstatechange = () => this.emit('state', { state: this.pc.iceConnectionState });
   }

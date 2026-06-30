@@ -19,6 +19,7 @@ import {
   ConnectSessionAction,
   NewSessionAction,
   CloseSessionsAction,
+  AnswerAskAction,
 } from '../../bl/tether.js';
 import statusBar from '../components/statusBar.js';
 import messageList from '../components/messageList.js';
@@ -26,6 +27,7 @@ import micMeter from '../components/micMeter.js';
 import controlBar from '../components/controlBar.js';
 import settingsSheet from '../components/settingsSheet.js';
 import sessionsSheet from '../components/sessionsSheet.js';
+import askPrompt from '../components/askPrompt.js';
 
 const { alias, div, p, strong } = dd;
 
@@ -49,6 +51,7 @@ export default function app(engine) {
     'connect-session': (e) => go(new ConnectSessionAction(e.detail.id)),
     'new-session': () => go(new NewSessionAction()),
     'close-sessions': () => go(new CloseSessionsAction()),
+    'answer-ask': (e) => go(new AnswerAskAction(e.detail.answer)),
   };
 
   return alias(() => div({ className: 'shell' }, watch(tether$, view)).on(handlers));
@@ -61,7 +64,10 @@ function view(state) {
 
   return div({ className: 'screen' },
     statusBar(state),
+    state.toast && div({ className: `banner ${state.toast.level || 'info'}` }, state.toast.text),
     showHero ? hero(state) : messageList(state.messages),
+    state.statusLine && div({ className: 'status-line' }, state.statusLine),
+    state.ask && askPrompt(state.ask),
     micMeter(state),
     controlBar(state),
     state.sttState === 'loading' && div({ className: 'banner' }, `loading speech model… ${state.sttProgress || 0}%`),

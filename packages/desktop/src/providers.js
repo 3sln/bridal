@@ -14,6 +14,18 @@ import { SignalingClient } from './signaling-client.js';
 import { HostPeer } from './peer.js';
 import * as registry from './registry.js';
 import * as service from './service.js';
+import { FrontendController } from './frontend.js';
+
+/** The phone front-end controller (shared by the session and the MCP server). */
+export class FrontendProvider extends Provider {
+  constructor() {
+    super();
+    this.controller = new FrontendController();
+  }
+  async obtain() {
+    return this.controller;
+  }
+}
 
 /** Setups registry (persistent JSON + env files). */
 export class RegistryProvider extends Provider {
