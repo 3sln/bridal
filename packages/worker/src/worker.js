@@ -34,10 +34,10 @@ function turnConfig(env) {
   };
 }
 
-// Assemble the ICE server list for a client. Always includes the free STUN +
-// OpenRelay base; prepends a fresh, short-lived Cloudflare TURN credential when
-// it's configured and the budget governor approves. Any failure degrades to the
-// free base rather than erroring the client's connection.
+// Assemble the ICE server list for a client. Always includes the STUN base;
+// prepends a fresh, short-lived Cloudflare TURN credential when it's configured
+// and the budget governor approves. Any failure degrades to STUN-only rather
+// than erroring the client's connection.
 async function issueIce(request, env) {
   const base = baseIceServers();
   const cfg = turnConfig(env);
@@ -83,7 +83,7 @@ export default {
       // Serve the built PWA. `env.ASSETS` is configured with SPA fallback in
       // wrangler.toml (not_found_handling = "single-page-application").
       serveAsset: (req) => env.ASSETS.fetch(req),
-      // Hand out budget-governed ICE servers (STUN + OpenRelay + Cloudflare TURN).
+      // Hand out budget-governed ICE servers (STUN + Cloudflare TURN).
       issueIce: (req) => issueIce(req, env),
     });
   },

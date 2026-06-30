@@ -1,10 +1,11 @@
 import { test, expect } from 'bun:test';
 import { baseIceServers, mintTurnCredentials, fetchTurnEgressBytes } from '../src/turn.js';
 
-test('baseIceServers always returns STUN plus a free TURN fallback', () => {
+test('baseIceServers returns STUN only (the relay is layered on per session)', () => {
   const servers = baseIceServers();
   expect(servers.some((s) => String(s.urls).includes('stun:'))).toBe(true);
-  expect(servers.some((s) => String(s.urls).includes('turn:'))).toBe(true);
+  // No static TURN relay — Cloudflare TURN is prepended at issue time, not here.
+  expect(servers.some((s) => String(s.urls).includes('turn:'))).toBe(false);
 });
 
 test('mintTurnCredentials posts ttl + customIdentifier and returns the ice entry', async () => {

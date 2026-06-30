@@ -2,22 +2,22 @@
 // best-effort real-usage probe. Platform-agnostic (fetch is injectable); the
 // Worker entry (`worker.js`) supplies the secrets and the budget DO.
 //
-// TURN is layered on top of the always-free STUN + OpenRelay set and only when
-// configured + within budget, so the deployment costs nothing until you opt in
-// and can never silently blow past the budget.
+// TURN is layered on top of the STUN base and only when configured + within
+// budget, so the deployment costs nothing until you opt in and can never
+// silently blow past the budget.
 
-import { STUN_SERVERS, OPEN_RELAY_TURN } from '@bridle/protocol/ice';
+import { STUN_SERVERS } from '@bridle/protocol/ice';
 
 const TURN_KEYS_API = 'https://rtc.live.cloudflare.com/v1/turn/keys';
 const GRAPHQL_API = 'https://api.cloudflare.com/client/v4/graphql';
 
 /**
- * The free, always-available ICE base: STUN for the common case plus the public
- * OpenRelay TURN as a zero-cost last resort. Cloudflare TURN is prepended to
- * this only when budget allows.
+ * The always-available ICE base: just STUN. A Cloudflare TURN relay is prepended
+ * to this when configured and within budget; without it there is no relay
+ * fallback (STUN only), which is the intended "fully Cloudflare" behaviour.
  */
 export function baseIceServers() {
-  return [...STUN_SERVERS, ...OPEN_RELAY_TURN];
+  return [...STUN_SERVERS];
 }
 
 /**

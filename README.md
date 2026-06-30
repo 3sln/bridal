@@ -149,8 +149,8 @@ server. ICE prefers direct candidates and only relays when it has to, so TURN is
 genuinely a backup, not the default path.
 
 The phone fetches its ICE servers per connection from the backend's **`/ice`**
-endpoint, which always returns STUN + the public OpenRelay TURN and — when
-configured — a **fresh, short-lived [Cloudflare Realtime TURN](https://developers.cloudflare.com/realtime/turn/)
+endpoint, which returns STUN plus — when configured — a **fresh, short-lived
+[Cloudflare Realtime TURN](https://developers.cloudflare.com/realtime/turn/)
 credential**. Only the phone allocates a relay (the desktop reuses that
 candidate), which halves credential issuance and avoids relay-to-relay egress.
 
@@ -169,8 +169,9 @@ credential grant to keep a public deployment from being abused into overage:
 All limits are `wrangler.toml` `[vars]` (`TURN_MONTHLY_GB_BUDGET`,
 `TURN_MAX_PER_IP_PER_DAY`, `TURN_MAX_PER_MINUTE`, `TURN_TTL_SECONDS`,
 `TURN_EST_MB_PER_GRANT`). **With no secrets set, TURN stays off** and `/ice`
-returns just the free STUN + OpenRelay set — the deployment costs nothing until you
-opt in. See the Deploy section for the secrets.
+returns STUN only (no relay) — so set the secrets below to get the backup relay.
+See the Deploy section. (The old public OpenRelay relay was dropped: metered
+deprecated its static credentials as unreliable.)
 
 ## Multiple tethers
 
@@ -222,22 +223,30 @@ Cloudflare dashboard, connect this repo and set:
 | Setting | Value |
 | --- | --- |
 | Root directory | `/` (repo root) |
-| Build command | `npm install && npm run build:pwa` |
-| Deploy command | `npx wrangler deploy --config packages/worker/wrangler.toml` |
+| Build command | `bun install && bun run build:pwa` |
+| Deploy command | `bunx wrangler deploy --config packages/worker/wrangler.toml` |
+
+> **The `--config packages/worker/wrangler.toml` is required.** Builds run from
+> the repo root, where there is no `wrangler.toml` (it lives in `packages/worker`).
+> A bare `wrangler deploy` / `wrangler versions upload` fails with *"Missing
+> entry-point to Worker script or to assets directory"* — point it at the config.
 
 `wrangler.toml` provisions the **Custom Domain** `bridle.3sln.com` on the existing
 `3sln.com` zone (doesn't touch sibling subdomains) and SQLite-backed Durable
 Objects for signaling rooms and the TURN budget (free-plan eligible). The PWA build
 output (`packages/pwa/dist`) is served as static assets with SPA fallback.
 
-**Enabling the Cloudflare TURN backup (optional).** Create a Realtime **TURN app**
-in the Cloudflare dashboard, then set its credentials as secrets (never commit
-them — they are not `[vars]`):
+**Enabling the Cloudflare TURN relay.** Subscribing to Realtime is *not* enough,
+and there is no Workers binding that injects the credentials — you must create a
+**TURN key** and give the worker its two values. In the Cloudflare dashboard:
+**Realtime → TURN → Create** (the TURN key is a long-term server secret that mints
+short-lived per-session credentials). It shows a **Turn Token ID** and an **API
+Token** (the token is shown only once — copy it). Then set them as secrets:
 
 ```sh
 cd packages/worker
-wrangler secret put TURN_KEY_ID
-wrangler secret put TURN_KEY_API_TOKEN
+wrangler secret put TURN_KEY_ID          # the "Turn Token ID"
+wrangler secret put TURN_KEY_API_TOKEN   # the API Token (shown once on creation)
 # Optional — a real (not estimated) monthly-GB gate. Needs an API token with the
 # "Account Analytics" permission, plus your account id:
 wrangler secret put TURN_ANALYTICS_TOKEN
@@ -245,7 +254,7 @@ wrangler secret put CF_ACCOUNT_ID
 ```
 
 Tune the budget/rate limits via `[vars]` in `wrangler.toml`. Without these secrets,
-TURN stays off and only the free STUN + OpenRelay servers are handed out.
+TURN stays off and `/ice` returns STUN only (no relay).
 
 Manual deploy:
 

@@ -35,8 +35,8 @@ export async function handleRequest(request, { routeSignal, serveAsset, issueIce
   // Health check — handy for uptime probes and `wrangler tail` sanity.
   if (url.pathname === '/healthz') return json({ ok: true });
 
-  // ICE servers (STUN + OpenRelay + budget-governed Cloudflare TURN). The PWA
-  // calls this per connection so each gets a fresh, short-lived credential.
+  // ICE servers (STUN + budget-governed Cloudflare TURN). The PWA calls this
+  // per connection so each gets a fresh, short-lived credential.
   if (url.pathname === '/ice') {
     if (request.method === 'OPTIONS') return cors(new Response(null, { status: 204 }));
     const result = issueIce ? await issueIce(request) : { iceServers: [] };

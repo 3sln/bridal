@@ -56,8 +56,8 @@ new_sqlite_classes = ["BridleTurnBudget"]
 #   wrangler secret put TURN_ANALYTICS_TOKEN
 #   wrangler secret put CF_ACCOUNT_ID
 #
-# With no secrets set, /ice simply returns the free STUN + OpenRelay set and TURN
-# stays off — the deployment costs nothing until you opt in.
+# With no secrets set, /ice simply returns STUN only (no relay) and TURN stays
+# off — the deployment costs nothing until you opt in.
 [vars]
 TURN_MONTHLY_GB_BUDGET = 500   # stop issuing TURN credentials past this (free tier is 1000)
 TURN_EST_MB_PER_GRANT = 100    # assumed egress per session, used when analytics isn't configured
