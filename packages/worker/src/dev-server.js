@@ -6,6 +6,7 @@
 //   bun src/dev-server.js [--port 8787] [--assets ../pwa/dist]
 
 import { SignalingRoom } from './signaling-room.js';
+import { baseIceServers } from './turn.js';
 import { isValidRoomCode } from '@bridle/protocol/signaling';
 
 // One in-memory hub of rooms, keyed by code. Garbage-collected when empty.
@@ -33,6 +34,17 @@ const server = Bun.serve({
     const url = new URL(request.url);
 
     if (url.pathname === '/healthz') return new Response('ok');
+
+    // ICE servers — dev has no Cloudflare TURN secrets, so just the free base.
+    if (url.pathname === '/ice') {
+      return new Response(JSON.stringify({ iceServers: baseIceServers(), turn: false, reason: 'dev' }), {
+        headers: {
+          'content-type': 'application/json',
+          'access-control-allow-origin': '*',
+          'cache-control': 'no-store',
+        },
+      });
+    }
 
     if (url.pathname === '/signal') {
       const code = url.searchParams.get('room') || '';

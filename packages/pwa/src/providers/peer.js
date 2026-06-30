@@ -6,7 +6,7 @@
 // single-use), so reconnects after sleep/network changes just mint a new one.
 
 import { Provider } from '@3sln/ngin';
-import { iceConfig } from '@bridle/protocol/ice';
+import { iceConfig, fetchIceServers } from '@bridle/protocol/ice';
 import { encode, decode } from '@bridle/protocol/link';
 
 export class GuestPeer extends EventTarget {
@@ -96,13 +96,14 @@ export class GuestPeer extends EventTarget {
 }
 
 export class PeerProvider extends Provider {
-  static deps = ['config'];
-  constructor({ config }) {
-    super();
-    this.config = config;
-  }
   async obtain() {
-    const cfg = await this.config.obtain();
-    return () => new GuestPeer({ iceServers: cfg.iceServers });
+    // Async factory: each connection fetches fresh ICE servers from its tether's
+    // backend (`/ice`), so it gets its own short-lived Cloudflare TURN credential
+    // when one is available. Falls back to built-in defaults if the fetch fails.
+    return async ({ backendUrl, room } = {}) => {
+      const origin = backendUrl || (typeof location !== 'undefined' ? location.origin : undefined);
+      const iceServers = await fetchIceServers(origin, { room });
+      return new GuestPeer({ iceServers });
+    };
   }
 }

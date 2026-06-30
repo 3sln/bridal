@@ -41,3 +41,38 @@ export function iceConfig({ iceServers, turn = true } = {}) {
   if (iceServers) return { iceServers };
   return { iceServers: turn ? DEFAULT_ICE_SERVERS : STUN_SERVERS };
 }
+
+/**
+ * Fetch the backend's `/ice` endpoint to get budget-governed ICE servers
+ * (STUN + OpenRelay, plus a fresh short-lived Cloudflare TURN credential when
+ * the backend has it configured and within budget). Called per connection so
+ * each gets its own short-lived credential.
+ *
+ * Resilient by design: on any failure (offline, backend down, bad response) it
+ * returns the built-in `DEFAULT_ICE_SERVERS` so a connection is still attempted.
+ *
+ * @param {string} backend  backend origin/base URL (e.g. https://bridle.3sln.com)
+ * @param {{ room?: string, fetchImpl?: typeof fetch, timeoutMs?: number }} [opts]
+ * @returns {Promise<RTCIceServer[]>}
+ */
+export async function fetchIceServers(backend, { room, fetchImpl = fetch, timeoutMs = 4000 } = {}) {
+  try {
+    const base = String(backend || '').replace(/\/$/, '');
+    if (!base) return DEFAULT_ICE_SERVERS;
+    const u = `${base}/ice${room ? `?room=${encodeURIComponent(room)}` : ''}`;
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    let res;
+    try {
+      res = await fetchImpl(u, { signal: ctrl?.signal });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (!res.ok) throw new Error(`ice: HTTP ${res.status}`);
+    const data = await res.json();
+    if (Array.isArray(data?.iceServers) && data.iceServers.length) return data.iceServers;
+    throw new Error('ice: empty iceServers');
+  } catch {
+    return DEFAULT_ICE_SERVERS;
+  }
+}

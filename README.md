@@ -140,6 +140,38 @@ always-open host socket costs almost nothing while idle — the DO sleeps betwee
 signaling messages and wakes when a peer connects. (One host + one guest per room;
 the chat itself is P2P and never touches the backend.)
 
+## NAT traversal (STUN + TURN backup)
+
+The data channel is **peer-to-peer**; ICE finds a direct path using **STUN**. When
+both ends sit behind restrictive/symmetric NATs and no direct path exists, ICE
+falls back to a **TURN relay** — the only case where session traffic touches a
+server. ICE prefers direct candidates and only relays when it has to, so TURN is
+genuinely a backup, not the default path.
+
+The phone fetches its ICE servers per connection from the backend's **`/ice`**
+endpoint, which always returns STUN + the public OpenRelay TURN and — when
+configured — a **fresh, short-lived [Cloudflare Realtime TURN](https://developers.cloudflare.com/realtime/turn/)
+credential**. Only the phone allocates a relay (the desktop reuses that
+candidate), which halves credential issuance and avoids relay-to-relay egress.
+
+**Cost control (it's a free, public service).** Cloudflare TURN is free to
+1000 GB/month, then $0.05/GB, so a `BridleTurnBudget` Durable Object governs every
+credential grant to keep a public deployment from being abused into overage:
+
+- **Monthly GB ceiling** (default **500 GB** — half the free tier). Estimate-based
+  by default; gates on *real* month-to-date egress if you add a TURN-analytics token.
+- **Per-IP daily cap** + **global per-minute burst cap** — one client/script can't
+  drain the pool.
+- **Short-lived credentials** (default 2 h TTL), tagged with the room as
+  `customIdentifier` so spend is auditable per-tether and abusers' credentials can
+  be revoked from the dashboard.
+
+All limits are `wrangler.toml` `[vars]` (`TURN_MONTHLY_GB_BUDGET`,
+`TURN_MAX_PER_IP_PER_DAY`, `TURN_MAX_PER_MINUTE`, `TURN_TTL_SECONDS`,
+`TURN_EST_MB_PER_GRANT`). **With no secrets set, TURN stays off** and `/ice`
+returns just the free STUN + OpenRelay set — the deployment costs nothing until you
+opt in. See the Deploy section for the secrets.
+
 ## Multiple tethers
 
 The phone keeps a **list of tethers** (desktops/agents) and switches between them —
@@ -194,9 +226,26 @@ Cloudflare dashboard, connect this repo and set:
 | Deploy command | `npx wrangler deploy --config packages/worker/wrangler.toml` |
 
 `wrangler.toml` provisions the **Custom Domain** `bridle.3sln.com` on the existing
-`3sln.com` zone (doesn't touch sibling subdomains) and a SQLite-backed Durable
-Object for signaling rooms (free-plan eligible). The PWA build output
-(`packages/pwa/dist`) is served as static assets with SPA fallback.
+`3sln.com` zone (doesn't touch sibling subdomains) and SQLite-backed Durable
+Objects for signaling rooms and the TURN budget (free-plan eligible). The PWA build
+output (`packages/pwa/dist`) is served as static assets with SPA fallback.
+
+**Enabling the Cloudflare TURN backup (optional).** Create a Realtime **TURN app**
+in the Cloudflare dashboard, then set its credentials as secrets (never commit
+them — they are not `[vars]`):
+
+```sh
+cd packages/worker
+wrangler secret put TURN_KEY_ID
+wrangler secret put TURN_KEY_API_TOKEN
+# Optional — a real (not estimated) monthly-GB gate. Needs an API token with the
+# "Account Analytics" permission, plus your account id:
+wrangler secret put TURN_ANALYTICS_TOKEN
+wrangler secret put CF_ACCOUNT_ID
+```
+
+Tune the budget/rate limits via `[vars]` in `wrangler.toml`. Without these secrets,
+TURN stays off and only the free STUN + OpenRelay servers are handed out.
 
 Manual deploy:
 

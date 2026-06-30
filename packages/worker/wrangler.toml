@@ -26,6 +26,41 @@ not_found_handling = "single-page-application"
 name = "SIGNAL_ROOMS"
 class_name = "BridleRoom"
 
+# Single global usage governor for Cloudflare TURN. One instance (named "global")
+# serializes every credential request so the monthly/daily/per-minute caps are
+# globally consistent. SQLite-backed so it runs on the free plan.
+[[durable_objects.bindings]]
+name = "TURN_BUDGET"
+class_name = "BridleTurnBudget"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["BridleRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["BridleTurnBudget"]
+
+# --- Cloudflare TURN (backup relay) usage limits --------------------------------
+# TURN is a fallback ICE relay used only when peer-to-peer fails. It is FREE up to
+# 1000 GB/month on Cloudflare; we cap well under that and rate-limit per client so
+# a public deployment can't be abused into overage charges. All values overridable.
+#
+# To enable TURN, create a Realtime TURN app in the Cloudflare dashboard and set
+# the credentials as secrets (they are NOT vars — never commit them):
+#   wrangler secret put TURN_KEY_ID
+#   wrangler secret put TURN_KEY_API_TOKEN
+#
+# Optional, for a *real* (not estimated) monthly-GB gate — an API token with the
+# "Account Analytics" permission plus your account id:
+#   wrangler secret put TURN_ANALYTICS_TOKEN
+#   wrangler secret put CF_ACCOUNT_ID
+#
+# With no secrets set, /ice simply returns the free STUN + OpenRelay set and TURN
+# stays off — the deployment costs nothing until you opt in.
+[vars]
+TURN_MONTHLY_GB_BUDGET = 500   # stop issuing TURN credentials past this (free tier is 1000)
+TURN_EST_MB_PER_GRANT = 100    # assumed egress per session, used when analytics isn't configured
+TURN_MAX_PER_IP_PER_DAY = 25   # per-client daily credential cap (abuse guard)
+TURN_MAX_PER_MINUTE = 60       # global burst cap across all clients
+TURN_TTL_SECONDS = 7200        # credential lifetime (2h) — bounds a leaked credential
