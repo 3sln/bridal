@@ -175,7 +175,9 @@ export class SessionQuery extends Query {
           break;
         }
         case LINK.CONNECT_SESSION:
-          attachSession(msg.id || undefined);
+          // id present -> resume it; id null -> explicit fresh session.
+          if (msg.id) attachSession(msg.id);
+          else agent.beginSession({});
           break;
         case LINK.PING:
           peer?.send(pong(msg.ts));
