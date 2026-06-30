@@ -4,9 +4,14 @@
 // is Cloudflare-specific, and a deployment can supply its own TURN (incl.
 // Cloudflare TURN, Twilio NTS, coturn, ...) via config/providers.
 //
-// The well-known free relay is the Open Relay Project (metered.ca). It is
-// best-effort and rate-limited — fine for getting started, swap for your own
-// for anything sustained.
+// The well-known free relay is the Open Relay Project (metered.ca). These are
+// the canonical no-signup static credentials, BUT metered now considers static
+// credentials unreliable (they "stopped working on different networks") and
+// pushes you to a keyed relay you fetch per-session. So treat this as a
+// best-effort layer only. For a relay you can actually count on, point clients
+// at the backend `/ice` endpoint, which mints short-lived Cloudflare TURN
+// credentials (free to 1000 GB/mo) — or swap in a metered API key (free 20 GB/mo).
+// See packages/worker/src/turn.js.
 
 export const STUN_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
