@@ -128,6 +128,18 @@ It's a minimal Streamable-HTTP MCP server (`packages/desktop/src/mcp.js`), so an
 MCP-capable agent can use it — Claude is auto-configured; point others at the URL
 bridle prints (`http://127.0.0.1:<port>/mcp`).
 
+## Staying connected
+
+A daemonized desktop holds its signaling socket to the backend **open 24/7** on a
+**fixed room code**, so your phone can call in any time — open the PWA and it
+re-handshakes. Drops re-establish automatically: the phone leaving triggers a
+`peer-leave`, its return triggers a fresh offer/answer (and a re-prime); if the
+desktop sleeps or changes networks it auto-reconnects to the same room with
+backoff. Because the signaling room is a **hibernatable** Durable Object, the
+always-open host socket costs almost nothing while idle — the DO sleeps between
+signaling messages and wakes when a peer connects. (One host + one guest per room;
+the chat itself is P2P and never touches the backend.)
+
 ## Multiple tethers
 
 The phone keeps a **list of tethers** (desktops/agents) and switches between them —
