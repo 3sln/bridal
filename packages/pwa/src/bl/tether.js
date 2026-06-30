@@ -203,7 +203,10 @@ export class TetherQuery extends Query {
     async function startOffer() {
       teardownPeer();
       push({ connection: CONNECTION.NEGOTIATING });
-      peer = makePeer();
+      // Mint a fresh peer with ICE servers from the active tether's backend, so
+      // a short-lived Cloudflare TURN credential (if any) is scoped per session.
+      const t = tethers.active();
+      peer = await makePeer({ backendUrl: t?.backendUrl, room: t?.room });
       peer.addEventListener('open', onPeerOpen);
       peer.addEventListener('message', (e) => handleLink(e.detail.msg));
       peer.addEventListener('binary', (e) => onBinary(e.detail.chunk));

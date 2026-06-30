@@ -1,9 +1,10 @@
-// Platform-agnostic HTTP entry. Pure function of the request plus two injected
+// Platform-agnostic HTTP entry. Pure function of the request plus a few injected
 // capabilities, so the same routing works on Cloudflare, Node, Bun, Deno —
 // only the adapters differ:
 //
 //   routeSignal(request, room, role) -> Response   // hand off a WS upgrade
 //   serveAsset(request)              -> Response    // serve the built PWA
+//   issueIce(request)                -> object      // budget-governed ICE servers
 //
 // Nothing Cloudflare-specific lives here. See `worker.js` for the CF wiring and
 // `dev-server.js` for the Node/Bun wiring.
@@ -17,11 +18,30 @@ const json = (obj, status = 200) =>
 const text = (body, type = 'text/plain; charset=utf-8') =>
   new Response(body, { headers: { 'content-type': type, 'cache-control': 'public, max-age=300' } });
 
-export async function handleRequest(request, { routeSignal, serveAsset }) {
+// The ICE endpoint is fetched cross-origin when a tether points at a different
+// backend than the PWA's origin, so it carries permissive CORS. The response is
+// per-request (fresh, short-lived credentials) and must never be cached.
+const cors = (res) => {
+  res.headers.set('access-control-allow-origin', '*');
+  res.headers.set('access-control-allow-methods', 'GET, OPTIONS');
+  res.headers.set('access-control-allow-headers', 'content-type');
+  res.headers.set('cache-control', 'no-store');
+  return res;
+};
+
+export async function handleRequest(request, { routeSignal, serveAsset, issueIce }) {
   const url = new URL(request.url);
 
   // Health check — handy for uptime probes and `wrangler tail` sanity.
   if (url.pathname === '/healthz') return json({ ok: true });
+
+  // ICE servers (STUN + budget-governed Cloudflare TURN). The PWA calls this
+  // per connection so each gets a fresh, short-lived credential.
+  if (url.pathname === '/ice') {
+    if (request.method === 'OPTIONS') return cors(new Response(null, { status: 204 }));
+    const result = issueIce ? await issueIce(request) : { iceServers: [] };
+    return cors(json(result));
+  }
 
   // Install scripts (curl … | sh  /  irm … | iex). Explicit routes so they
   // never get the SPA fallback and carry the right content-type.
