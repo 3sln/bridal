@@ -49,6 +49,7 @@ export default alias(function (state) {
     state.speaking && button({ className: 'btn quiet' }, 'Quiet').on({ click: () => fire('stop-speaking') }),
     button({ className: 'btn ghost' }, 'Interrupt').on({ click: () => fire('interrupt') }),
     button({ className: 'btn ghost' }, 'Sessions').on({ click: () => fire('open-sessions') }),
+    button({ className: 'btn ghost' }, 'Tethers').on({ click: () => fire('open-tethers') }),
     button({ className: 'btn ghost icon' }, '⚙').on({ click: () => fire('open-settings') }),
   );
 

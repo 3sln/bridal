@@ -15,6 +15,10 @@ export const DEFAULTS = Object.freeze({
   commandLeadIn: 'bridle', // optional wake word to force command interpretation
   language: '', // Whisper language hint ('' = auto; ignored by *.en models)
   sttModel: 'Xenova/whisper-tiny.en', // offline Whisper model run in-browser
+  // hands-free / driving
+  drivingMode: false, // auto-conversation on connect + keep-awake + earcons
+  earcons: true, // non-visual audio cues for listening/processing/done
+  keepAwake: true, // hold a screen wake lock while in conversation
 });
 
 class Settings extends EventTarget {

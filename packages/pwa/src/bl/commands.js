@@ -21,6 +21,8 @@ export const CMD = Object.freeze({
   SESSIONS: 'sessions',
   NEW_SESSION: 'new-session',
   CONNECT_SESSION: 'connect-session', // carries { index }
+  TETHERS: 'tethers',
+  SWITCH_TETHER: 'switch-tether', // carries { index }
 });
 
 // phrase -> command. Longest/most-specific phrases should be matched first.
@@ -36,6 +38,7 @@ const PHRASES = [
   [CMD.SLOWER, ['speak slower', 'talk slower', 'slower']],
   [CMD.NEW_SESSION, ['new session', 'fresh session', 'new conversation', 'start over']],
   [CMD.SESSIONS, ['sessions', 'list sessions', 'show sessions', 'switch session', 'other sessions', 'my sessions']],
+  [CMD.TETHERS, ['tethers', 'list tethers', 'switch tether', 'switch device', 'devices', 'my devices']],
   [CMD.CLEAR, ['clear chat', 'clear', 'scratch that']],
 ];
 
@@ -44,14 +47,21 @@ const ORDINALS = {
   first: 1, second: 2, third: 3, fourth: 4, fifth: 5,
 };
 
+const NUM = '(\\d+|one|two|three|four|five|six|seven|eight|nine|ten|first|second|third|fourth|fifth)';
+const num = (s) => (/^\d+$/.test(s) ? parseInt(s, 10) : ORDINALS[s]);
+
 // "connect to session 2", "open session two", "resume session number 3"
 function matchConnect(text) {
-  const m = text.match(
-    /^(?:connect(?: to)?|open|switch to|resume|load|go to)?\s*session\s+(?:number\s+)?(\d+|one|two|three|four|five|six|seven|eight|nine|ten|first|second|third|fourth|fifth)$/,
-  );
-  if (!m) return null;
-  const n = /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : ORDINALS[m[1]];
+  const m = text.match(new RegExp(`^(?:connect(?: to)?|open|switch to|resume|load|go to)?\\s*session\\s+(?:number\\s+)?${NUM}$`));
+  const n = m && num(m[1]);
   return n ? { name: CMD.CONNECT_SESSION, index: n } : null;
+}
+
+// "switch to tether 2", "device two", "go to tether number 3"
+function matchTether(text) {
+  const m = text.match(new RegExp(`^(?:connect(?: to)?|open|switch to|switch|go to)?\\s*(?:tether|device)\\s+(?:number\\s+)?${NUM}$`));
+  const n = m && num(m[1]);
+  return n ? { name: CMD.SWITCH_TETHER, index: n } : null;
 }
 
 // Recognized even without the lead-in so the user can always cut in mid-reply.
@@ -83,7 +93,7 @@ export function parse(transcript, { leadIn = 'bridle' } = {}) {
   if (lead && (text === lead || text.startsWith(lead + ' '))) {
     // Explicit command: everything after the lead-in.
     const rest = text.slice(lead.length).trim();
-    return matchConnect(rest) || matchPhrase(rest) || { name: 'unknown', rest };
+    return matchTether(rest) || matchConnect(rest) || matchPhrase(rest) || { name: 'unknown', rest };
   }
 
   // No lead-in: only the always-on safety commands are honored, and only when

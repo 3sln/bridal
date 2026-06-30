@@ -37,3 +37,11 @@ test('connect to a session by number or ordinal', () => {
   expect(parse('bridle session two', { leadIn: 'bridle' })).toEqual({ name: CMD.CONNECT_SESSION, index: 2 });
   expect(parse('bridle open session number 3', { leadIn: 'bridle' })).toEqual({ name: CMD.CONNECT_SESSION, index: 3 });
 });
+
+test('tether switching commands', () => {
+  expect(parse('bridle tethers', { leadIn: 'bridle' })).toEqual({ name: CMD.TETHERS });
+  expect(parse('bridle switch to tether 2', { leadIn: 'bridle' })).toEqual({ name: CMD.SWITCH_TETHER, index: 2 });
+  expect(parse('bridle device two', { leadIn: 'bridle' })).toEqual({ name: CMD.SWITCH_TETHER, index: 2 });
+  // "session N" must not be read as a tether switch
+  expect(parse('bridle session 2', { leadIn: 'bridle' })).toEqual({ name: CMD.CONNECT_SESSION, index: 2 });
+});

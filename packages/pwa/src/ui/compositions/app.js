@@ -20,6 +20,11 @@ import {
   NewSessionAction,
   CloseSessionsAction,
   AnswerAskAction,
+  OpenTethersAction,
+  CloseTethersAction,
+  SwitchTetherAction,
+  AddTetherAction,
+  RemoveTetherAction,
 } from '../../bl/tether.js';
 import statusBar from '../components/statusBar.js';
 import messageList from '../components/messageList.js';
@@ -27,6 +32,7 @@ import micMeter from '../components/micMeter.js';
 import controlBar from '../components/controlBar.js';
 import settingsSheet from '../components/settingsSheet.js';
 import sessionsSheet from '../components/sessionsSheet.js';
+import tethersSheet from '../components/tethersSheet.js';
 import askPrompt from '../components/askPrompt.js';
 
 const { alias, div, p, strong } = dd;
@@ -52,6 +58,11 @@ export default function app(engine) {
     'new-session': () => go(new NewSessionAction()),
     'close-sessions': () => go(new CloseSessionsAction()),
     'answer-ask': (e) => go(new AnswerAskAction(e.detail.answer)),
+    'open-tethers': () => go(new OpenTethersAction()),
+    'close-tethers': () => go(new CloseTethersAction()),
+    'switch-tether': (e) => go(new SwitchTetherAction(e.detail.id)),
+    'add-tether': (e) => go(new AddTetherAction(e.detail)),
+    'remove-tether': (e) => go(new RemoveTetherAction(e.detail.id)),
   };
 
   return alias(() => div({ className: 'shell' }, watch(tether$, view)).on(handlers));
@@ -74,10 +85,18 @@ function view(state) {
     state.error && div({ className: 'banner error' }, state.error),
     state.sheetOpen && settingsSheet(state),
     state.sessionsOpen && sessionsSheet(state),
+    state.tethersOpen && tethersSheet(state),
   );
 }
 
 function hero(state) {
+  if (state.connection === 'no-tether') {
+    return div({ className: 'hero' },
+      p({ className: 'hero-title' }, '🐴 bridle'),
+      p(['Scan the QR from ', strong('bridle'), ' on your desktop — or add it in ', strong('Tethers'), '.']),
+      p({ className: 'hint' }, 'Already paired? Open Tethers to pick a desktop.'),
+    );
+  }
   return div({ className: 'hero' },
     p({ className: 'hero-title' }, '🐴 bridle'),
     p(state.connection === 'waiting'

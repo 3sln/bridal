@@ -6,19 +6,20 @@ import { Provider } from '@3sln/ngin';
 import { SIGNAL } from '@bridle/protocol/signaling';
 
 export class SignalingClient extends EventTarget {
-  constructor({ url, room, role = 'guest' }) {
+  constructor({ role = 'guest' } = {}) {
     super();
-    this.baseUrl = url;
-    this.room = room;
     this.role = role;
+    this.target = null; // { url, room } — set per connect so tethers can switch
     this.ws = null;
     this.closedByUs = false;
     this.retry = 0;
   }
 
-  connect() {
+  connect(target) {
+    if (target) this.target = target;
+    if (!this.target) return;
     this.closedByUs = false;
-    this.ws = new WebSocket(toWsUrl(this.baseUrl, this.room, this.role));
+    this.ws = new WebSocket(toWsUrl(this.target.url, this.target.room, this.role));
     this.ws.onopen = () => {
       this.retry = 0;
       this.emit('open', {});
@@ -80,13 +81,7 @@ function toWsUrl(base, room, role) {
 }
 
 export class SignalingProvider extends Provider {
-  static deps = ['config'];
-  constructor({ config }) {
-    super();
-    this.config = config;
-  }
   async obtain() {
-    const cfg = await this.config.obtain();
-    return new SignalingClient({ url: cfg.backendUrl, room: cfg.room, role: 'guest' });
+    return new SignalingClient({ role: 'guest' });
   }
 }

@@ -150,3 +150,6 @@ body {
 .session-meta { display: flex; flex-direction: column; min-width: 0; }
 .session-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session-when { font-size: 12px; color: var(--muted); }
+.session .remove { margin-left: auto; padding: 6px 10px; }
+.status .tether-chip { cursor: pointer; }
+.session-list + .composer { margin-top: 10px; }

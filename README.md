@@ -128,6 +128,32 @@ It's a minimal Streamable-HTTP MCP server (`packages/desktop/src/mcp.js`), so an
 MCP-capable agent can use it — Claude is auto-configured; point others at the URL
 bridle prints (`http://127.0.0.1:<port>/mcp`).
 
+## Multiple tethers
+
+The phone keeps a **list of tethers** (desktops/agents) and switches between them —
+their daemons keep running, so they coexist; you're just changing focus. Scan a
+desktop's QR to add one (or paste its room code in **Tethers**). Switch by tapping
+the active-tether chip in the header, or by voice: **"bridle tethers"** to see the
+list, **"bridle tether 2"** to switch. Each tether auto-labels itself from the
+desktop (`claude · my-project`).
+
+## Hands-free / driving
+
+Bridle is built for eyes-off use — talking to your agent while driving:
+
+- **Driving mode** (one toggle): auto-starts conversation on connect, keeps the
+  screen awake, and enables audio cues.
+- **Car / headset / lock-screen controls** (MediaSession): play→listen,
+  pause→pause listening, stop→stop talking, ⏮→repeat, ⏭→interrupt. Steering-wheel
+  buttons just work.
+- **Earcons**: short tones for listening / thinking / answer-ready / error, so you
+  know the state without looking.
+- **Wake Lock** keeps the session alive; **barge-in** ("stop talking") cuts the
+  agent off instantly; the **voice-connect primer** already tells the agent to keep
+  replies short and speech-friendly.
+- The agent can **push audio/answers** to you via MCP (`play_audio`, `ask`) — ideal
+  when reading a screen isn't an option.
+
 ## Repo layout
 
 ```

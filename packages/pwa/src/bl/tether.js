@@ -19,8 +19,10 @@ import {
 } from '@bridle/protocol/link';
 import { offer as mkOffer } from '@bridle/protocol/signaling';
 import { parse as parseCommand, CMD } from './commands.js';
+import { createEarcons, createWakeLock, setupMediaSession } from '../hands.js';
 
 export const CONNECTION = Object.freeze({
+  NONE: 'no-tether', // no tether selected — scan a QR
   CONNECTING: 'connecting',
   WAITING: 'waiting', // signaling up, desktop not present yet
   NEGOTIATING: 'negotiating',
@@ -52,11 +54,11 @@ function resolveChoice(text, choices) {
 }
 
 export class TetherQuery extends Query {
-  static deps = ['config', 'settings', 'signaling', 'peer', 'mic', 'tts', 'stt'];
+  static deps = ['config', 'settings', 'signaling', 'peer', 'mic', 'tts', 'stt', 'tethers'];
 
-  async boot({ config, settings, signaling, peer: makePeer, mic, tts, stt }, { notify, engineFeed }) {
+  async boot({ config, settings, signaling, peer: makePeer, mic, tts, stt, tethers }, { notify, engineFeed }) {
     const state = {
-      connection: CONNECTION.CONNECTING,
+      connection: CONNECTION.NONE,
       conversation: false,
       listening: false,
       speaking: false,
@@ -66,7 +68,7 @@ export class TetherQuery extends Query {
       messages: [],
       level: 0,
       error: null,
-      room: config.room,
+      room: '',
       agent: null,
       micSupported: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
       ttsSupported: tts.supported,
@@ -79,7 +81,16 @@ export class TetherQuery extends Query {
       statusLine: '', // transient agent status (set_status)
       toast: null, // { text, level } notice
       ask: null, // { id, question, choices } pending prompt
+      tethers: [], // known desktops/agents this phone can reach
+      activeTetherId: null,
+      tetherLabel: null,
+      tethersOpen: false,
     };
+
+    // Hands-free helpers (driving / eyes-off use).
+    const earcons = createEarcons();
+    const wake = createWakeLock();
+    const earcon = (name) => settings.get('earcons') && earcons[name] && earcons[name]();
     const refreshSettings = () => {
       state.settings = settings.all();
     };
@@ -93,6 +104,7 @@ export class TetherQuery extends Query {
     let peer = null;
     let speakBuffer = '';
     let incomingAsset = null; // asset being received (between ASSET_BEGIN/END)
+    let replyPending = false; // we sent input and are awaiting the agent's reply
     let flushTimer = null;
     let lastLevelNotify = 0;
 
@@ -166,11 +178,13 @@ export class TetherQuery extends Query {
     // Transcribe locally, then decide: command (run here) or dictation (-> agent).
     async function transcribeUtterance({ blob }) {
       push({ processing: true });
+      earcon('think');
       try {
         const heard = await stt.transcribe(blob);
         push({ processing: false, sttState: 'ready' });
         onTranscript(heard);
       } catch (err) {
+        earcon('error');
         push({ processing: false, sttState: 'error', error: `speech: ${err.message}` });
       }
     }
@@ -209,8 +223,33 @@ export class TetherQuery extends Query {
     function onPeerOpen() {
       push({ connection: CONNECTION.TETHERED, error: null });
       peer.send(helloGuest());
-      if (settings.get('conversationOnConnect')) startConversation();
+      if (settings.get('conversationOnConnect') || settings.get('drivingMode')) startConversation();
     }
+
+    // --- tethers: connect to the active one; reconnect on switch ------------
+    let currentTetherId = null;
+    const refreshTethers = () => {
+      state.tethers = tethers.list();
+      state.activeTetherId = tethers.activeId;
+    };
+    function connectActive() {
+      const t = tethers.active();
+      teardownPeer();
+      signaling.close();
+      refreshTethers();
+      currentTetherId = t?.id || null;
+      if (t) {
+        push({ connection: CONNECTION.CONNECTING, room: t.room, tetherLabel: t.label, agent: null, currentSession: null });
+        signaling.connect({ url: t.backendUrl, room: t.room });
+      } else {
+        push({ connection: CONNECTION.NONE, room: '', tetherLabel: null });
+      }
+    }
+    tethers.addEventListener('change', () => {
+      refreshTethers();
+      if ((tethers.active()?.id || null) !== currentTetherId) connectActive();
+      else notifyNow();
+    });
 
     signaling.addEventListener('open', () => push({ connection: CONNECTION.CONNECTING }));
     signaling.addEventListener('joined', (e) => {
@@ -234,11 +273,19 @@ export class TetherQuery extends Query {
     // --- inbound link messages ----------------------------------------------
     function handleLink(msg) {
       switch (msg.t) {
-        case LINK.HELLO:
+        case LINK.HELLO: {
           push({ agent: msg.agent || 'agent' });
+          // Give the active tether a friendly auto-label from the desktop.
+          const base = (msg.cwd || '').split(/[\\/]/).filter(Boolean).pop();
+          if (state.activeTetherId) tethers.setAutoLabel(state.activeTetherId, base ? `${msg.agent} · ${base}` : msg.agent);
           addMessage('system', `connected to ${msg.agent || 'agent'}`, 'status');
           break;
+        }
         case LINK.OUTPUT:
+          if (replyPending) {
+            earcon('done');
+            replyPending = false;
+          }
           appendAssistant(msg.text);
           speakChunk(msg.text);
           break;
@@ -332,6 +379,7 @@ export class TetherQuery extends Query {
       } else {
         addMessage('user', heard);
         peer?.send(mkText(heard));
+        replyPending = true;
       }
     }
 
@@ -399,6 +447,15 @@ export class TetherQuery extends Query {
           }
           break;
         }
+        case CMD.TETHERS:
+          push({ tethersOpen: true });
+          break;
+        case CMD.SWITCH_TETHER: {
+          const t = state.tethers[(cmd.index || 1) - 1];
+          if (t) tethers.setActive(t.id);
+          else push({ tethersOpen: true });
+          break;
+        }
         default:
           addMessage('system', `unknown command${cmd.rest ? `: ${cmd.rest}` : ''}`, 'error');
       }
@@ -408,8 +465,11 @@ export class TetherQuery extends Query {
     async function startConversation() {
       try {
         stt.prewarm(); // download/init the model while the user speaks the first line
+        earcons.resume(); // unlock audio for earcons within this user gesture
         await mic.start();
+        if (settings.get('keepAwake') || settings.get('drivingMode')) wake.enable();
         push({ conversation: true, listening: true });
+        earcon('listen');
       } catch (err) {
         push({ error: `mic: ${err.message}` });
       }
@@ -417,15 +477,19 @@ export class TetherQuery extends Query {
     async function stopConversation() {
       await mic.stop();
       tts.cancel();
+      wake.disable();
       push({ conversation: false, listening: false });
+      earcon('stop');
     }
     function toggleListening() {
       if (state.listening) {
         mic.pause();
         push({ listening: false });
+        earcon('stop');
       } else {
         mic.resume();
         push({ listening: true });
+        earcon('listen');
       }
     }
 
@@ -498,14 +562,40 @@ export class TetherQuery extends Query {
             push({ ask: null });
           }
           break;
+        case 'switch-tether':
+          tethers.setActive(it.id);
+          break;
+        case 'add-tether':
+          if (it.room) tethers.setActive(tethers.add({ room: it.room, backendUrl: it.backendUrl, label: it.label }));
+          break;
+        case 'remove-tether':
+          tethers.remove(it.id);
+          break;
+        case 'rename-tether':
+          tethers.rename(it.id, it.label);
+          break;
+        case 'set-tethers-sheet':
+          push({ tethersOpen: !!it.open });
+          break;
         default:
           break;
       }
     }
     engineFeed.addEventListener('intent', onIntent);
 
+    // Hardware transport controls (car / headset / lock screen).
+    const media = setupMediaSession({
+      play: () => (state.conversation ? toggleListening() : startConversation()),
+      pause: () => state.listening && toggleListening(),
+      stop: () => tts.cancel(),
+      previous: () => tts.repeat(),
+      next: () => peer?.send(mkCommand(COMMAND.INTERRUPT)),
+    });
+    tts.addEventListener('speaking', () => media.setState(true));
+    tts.addEventListener('idle', () => media.setState(false));
+
     // --- go -----------------------------------------------------------------
-    signaling.connect();
+    connectActive();
     notifyNow();
 
     this.kill = () => {
@@ -515,6 +605,7 @@ export class TetherQuery extends Query {
       signaling.close();
       mic.stop();
       tts.cancel();
+      wake.disable();
     };
   }
 }
@@ -597,6 +688,53 @@ export class AnswerAskAction extends Action {
   }
   execute(_, { engineFeed }) {
     emit(engineFeed, { type: 'answer-ask', answer: this.answer });
+  }
+}
+
+// --- tethers ---
+export class OpenTethersAction extends IntentOnly {
+  intent = { type: 'set-tethers-sheet', open: true };
+}
+export class CloseTethersAction extends IntentOnly {
+  intent = { type: 'set-tethers-sheet', open: false };
+}
+export class SwitchTetherAction extends Action {
+  constructor(id) {
+    super();
+    this.id = id;
+  }
+  execute(_, { engineFeed }) {
+    emit(engineFeed, { type: 'switch-tether', id: this.id });
+  }
+}
+export class AddTetherAction extends Action {
+  constructor({ room, backendUrl, label } = {}) {
+    super();
+    this.room = room;
+    this.backendUrl = backendUrl;
+    this.label = label;
+  }
+  execute(_, { engineFeed }) {
+    emit(engineFeed, { type: 'add-tether', room: this.room, backendUrl: this.backendUrl, label: this.label });
+  }
+}
+export class RemoveTetherAction extends Action {
+  constructor(id) {
+    super();
+    this.id = id;
+  }
+  execute(_, { engineFeed }) {
+    emit(engineFeed, { type: 'remove-tether', id: this.id });
+  }
+}
+export class RenameTetherAction extends Action {
+  constructor(id, label) {
+    super();
+    this.id = id;
+    this.label = label;
+  }
+  execute(_, { engineFeed }) {
+    emit(engineFeed, { type: 'rename-tether', id: this.id, label: this.label });
   }
 }
 
