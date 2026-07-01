@@ -12,6 +12,7 @@ import { MicProvider } from './providers/mic.js';
 import { TtsProvider } from './providers/tts.js';
 import { SttProvider } from './providers/stt.js';
 import { TethersProvider } from './providers/tethers.js';
+import { IdentityProvider } from './providers/identity.js';
 import app from './ui/compositions/app.js';
 
 const root = document.querySelector('.app');
@@ -26,6 +27,7 @@ const engine = new Engine({
     tts: TtsProvider,
     stt: SttProvider,
     tethers: TethersProvider,
+    identity: IdentityProvider,
   },
 });
 

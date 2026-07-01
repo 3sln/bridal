@@ -73,5 +73,11 @@ test('landing component renders its hero and install command', () => {
 test('statusBar reflects connection state', () => {
   const root = mount(statusBar({ connection: 'tethered', tetherLabel: 'claude · demo', room: 'ABC123' }));
   expect(root.querySelector('.status .dot.tethered')).toBeTruthy();
-  expect(root.textContent).toContain('tethered');
+  expect(root.querySelector('.tether-chip')?.textContent).toContain('claude · demo');
+});
+
+test('statusBar shows a status label when there is no tether yet', () => {
+  const root = mount(statusBar({ connection: 'connecting' }));
+  expect(root.querySelector('.status .dot.connecting')).toBeTruthy();
+  expect(root.textContent).toContain('connecting');
 });

@@ -1,6 +1,7 @@
 // Tethers sheet: switch between desktops/agents, or add one by code. Pure dodo —
 // emits switch-tether/remove-tether/add-tether/close-tethers.
 import { dd } from '../../runtime.js';
+import { icon } from '../icon.js';
 
 const { alias, div, span, button, ul, li, input, p } = dd;
 
@@ -29,12 +30,12 @@ export default alias(function (state) {
         ? ul({ className: 'session-list' },
             list.map((t, i) =>
               li({ className: `session ${t.id === state.activeTetherId ? 'current' : ''}` },
-                span({ className: 'idx' }, String(i + 1)),
+                span({ className: 'idx' }, icon('dns')),
                 div({ className: 'session-meta' },
                   span({ className: 'session-title' }, t.label || t.room),
                   span({ className: 'session-when' }, `#${t.room}`),
                 ),
-                button({ className: 'btn ghost icon remove' }, '✕').on({
+                button({ className: 'icon-btn remove', title: 'Remove', 'aria-label': 'Remove tether' }, icon('close')).on({
                   click: (e) => { e.stopPropagation(); fire('remove-tether', { id: t.id }); },
                 }),
               ).on({ click: () => fire('switch-tether', { id: t.id }) }).key(t.id),
@@ -46,7 +47,7 @@ export default alias(function (state) {
           $attach: (el) => { self._code = el; },
           keydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); addByCode(); } },
         }),
-        button({ className: 'btn send' }, 'Add').on({ click: addByCode }),
+        button({ className: 'btn send' }, icon('add'), 'Add').on({ click: addByCode }),
       ),
       p({ className: 'hint' }, `Say "${(state.settings && state.settings.commandLeadIn) || 'bridle'} tether 2" to switch by voice.`),
     ),

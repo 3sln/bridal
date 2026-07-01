@@ -43,7 +43,7 @@ export default alias(function (state) {
       div({ className: 'sheet-head' }, span('Settings'), button({ className: 'btn ghost' }, 'Done').on({ click: close })),
       toggle('drivingMode', 'Driving mode (hands-free)'),
       toggle('autoSpeak', 'Read replies aloud'),
-      toggle('conversationOnConnect', 'Start conversation on connect'),
+      toggle('conversationOnConnect', 'Start hands-free voice on connect'),
       toggle('earcons', 'Audio cues (earcons)'),
       toggle('keepAwake', 'Keep screen awake'),
       toggle('mediaControls', 'Headset / car buttons'),

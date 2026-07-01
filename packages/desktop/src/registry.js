@@ -46,13 +46,22 @@ export async function getSetup(name) {
 }
 
 /**
+ * Persist a setup. Tethers are NOT deduplicated by name: re-pairing the same
+ * directory updates that tether in place, but a different directory naming a
+ * colliding tether gets a fresh suffixed key so neither clobbers the other.
  * @param {{name:string, room:string, agent:string[], cwd:string, backendUrl:string, createdAt?:string}} setup
  */
 export async function saveSetup(setup) {
   await ensureDir();
   const all = await readSetups();
-  const key = safeName(setup.name);
-  all[key] = { ...all[key], ...setup, name: key };
+  let key = safeName(setup.name);
+  if (setup.cwd) {
+    while (all[key] && all[key].cwd && all[key].cwd !== setup.cwd) {
+      const m = key.match(/^(.*?)-(\d+)$/);
+      key = m ? `${m[1]}-${Number(m[2]) + 1}` : `${key}-2`;
+    }
+  }
+  all[key] = { ...all[key], ...setup, name: key, cwd: setup.cwd ?? all[key]?.cwd };
   await writeFile(setupsFile(), JSON.stringify(all, null, 2));
   return all[key];
 }
@@ -61,14 +70,49 @@ export async function removeSetup(name) {
   const key = safeName(name);
   const all = await readSetups();
   if (!all[key]) return false;
+  const room = all[key].room;
   delete all[key];
   await writeFile(setupsFile(), JSON.stringify(all, null, 2));
+  if (room) {
+    await removePin(room).catch(() => {});
+  }
   try {
     await rm(envFileFor(key), { force: true });
   } catch {
     /* env file may not exist */
   }
   return true;
+}
+
+// --- device pins (TOFU) -----------------------------------------------------
+// Map a tether's token (room) to the fingerprint of the phone we paired with.
+// Kept separate from setups so it works for both foreground and daemon runs and
+// survives the auto-daemon handoff (same token). A leaked token alone can't
+// drive the agent once a device is pinned here.
+const pinsFile = () => join(configDir(), 'pins.json');
+
+async function readPins() {
+  try {
+    return JSON.parse(await readFile(pinsFile(), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+export async function getPin(token) {
+  const all = await readPins();
+  return all[token] || null;
+}
+export async function savePin(token, fingerprint) {
+  await ensureDir();
+  const all = await readPins();
+  all[token] = fingerprint;
+  await writeFile(pinsFile(), JSON.stringify(all, null, 2));
+}
+export async function removePin(token) {
+  const all = await readPins();
+  if (!all[token]) return;
+  delete all[token];
+  await writeFile(pinsFile(), JSON.stringify(all, null, 2));
 }
 
 /** Write the per-setup secret env file (0600). */

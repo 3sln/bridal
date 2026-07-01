@@ -41,7 +41,7 @@ export function iceConfig({ iceServers } = {}) {
  * @param {{ room?: string, fetchImpl?: typeof fetch, timeoutMs?: number }} [opts]
  * @returns {Promise<RTCIceServer[]>}
  */
-export async function fetchIceServers(backend, { room, fetchImpl = fetch, timeoutMs = 4000 } = {}) {
+export async function fetchIceServers(backend, { room, fetchImpl = fetch, timeoutMs = 10000 } = {}) {
   try {
     const base = String(backend || '').replace(/\/$/, '');
     if (!base) return DEFAULT_ICE_SERVERS;

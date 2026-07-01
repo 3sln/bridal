@@ -8,7 +8,8 @@
     ".": "./index.js",
     "./signaling": "./signaling.js",
     "./link": "./link.js",
-    "./ice": "./ice.js"
+    "./ice": "./ice.js",
+    "./identity": "./identity.js"
   },
   "license": "MIT",
   "author": "Ray Stubbs"

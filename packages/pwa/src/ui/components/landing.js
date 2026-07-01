@@ -69,7 +69,7 @@ export default alias(function () {
           li({}, 'In any project, run ', h('code', {}, 'bridle'), ' (or ', h('code', {}, 'bridle codex'), ', etc.).'),
           li({}, 'It prints a QR and installs itself as a background service for that project.'),
           li({}, 'Scan the QR with your phone — it opens this app and links over a peer-to-peer data channel.'),
-          li({}, 'Talk to your agent. Turn on conversation mode and just speak; say “stop talking” to cut in.'),
+          li({}, 'Talk to your agent. Tap the mic to go hands-free and just speak; say “stop talking” to cut in.'),
         ),
         div({ className: 'lp-actions' },
           a({ className: 'btn lp-btn', href: REPO, target: '_blank', rel: 'noopener' }, 'Docs & source'),

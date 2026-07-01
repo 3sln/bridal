@@ -45,6 +45,9 @@ switch (parsed.sub) {
   case 'rm':
     await cmdRemove(parsed.positional[0]);
     break;
+  case 'tether':
+    await cmdPair();
+    break;
   case 'install':
     await cmdInstall();
     break;

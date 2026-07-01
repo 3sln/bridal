@@ -7,6 +7,7 @@ import {
   TetherQuery,
   SendTextAction,
   ToggleConversationAction,
+  CancelVoicePrepAction,
   ToggleListeningAction,
   StopSpeakingAction,
   InterruptAgentAction,
@@ -22,11 +23,14 @@ import {
   AnswerAskAction,
   OpenTethersAction,
   CloseTethersAction,
+  OpenDetailsAction,
+  CloseDetailsAction,
   SwitchTetherAction,
   AddTetherAction,
   RemoveTetherAction,
 } from '../../bl/tether.js';
 import landing from '../components/landing.js';
+import voicePrep from '../components/voicePrep.js';
 import statusBar from '../components/statusBar.js';
 import messageList from '../components/messageList.js';
 import micMeter from '../components/micMeter.js';
@@ -34,6 +38,7 @@ import controlBar from '../components/controlBar.js';
 import settingsSheet from '../components/settingsSheet.js';
 import sessionsSheet from '../components/sessionsSheet.js';
 import tethersSheet from '../components/tethersSheet.js';
+import detailsSheet from '../components/detailsSheet.js';
 import askPrompt from '../components/askPrompt.js';
 
 const { alias, div, p, strong } = dd;
@@ -46,6 +51,7 @@ export default function app(engine) {
   const handlers = {
     'send-text': (e) => go(new SendTextAction(e.detail)),
     'toggle-conversation': () => go(new ToggleConversationAction()),
+    'cancel-voice-prep': () => go(new CancelVoicePrepAction()),
     'toggle-listening': () => go(new ToggleListeningAction()),
     'stop-speaking': () => go(new StopSpeakingAction()),
     interrupt: () => go(new InterruptAgentAction()),
@@ -61,6 +67,8 @@ export default function app(engine) {
     'answer-ask': (e) => go(new AnswerAskAction(e.detail.answer)),
     'open-tethers': () => go(new OpenTethersAction()),
     'close-tethers': () => go(new CloseTethersAction()),
+    'open-details': () => go(new OpenDetailsAction()),
+    'close-details': () => go(new CloseDetailsAction()),
     'switch-tether': (e) => go(new SwitchTetherAction(e.detail.id)),
     'add-tether': (e) => go(new AddTetherAction(e.detail)),
     'remove-tether': (e) => go(new RemoveTetherAction(e.detail.id)),
@@ -93,11 +101,12 @@ function view(state) {
     state.ask && askPrompt(state.ask),
     micMeter(state),
     controlBar(state),
-    state.sttState === 'loading' && div({ className: 'banner' }, `loading speech model… ${state.sttProgress || 0}%`),
     state.error && div({ className: 'banner error' }, state.error),
     state.sheetOpen && settingsSheet(state),
     state.sessionsOpen && sessionsSheet(state),
     state.tethersOpen && tethersSheet(state),
+    state.detailsOpen && detailsSheet(state),
+    state.preparingVoice && voicePrep(state),
   );
 }
 
@@ -114,6 +123,6 @@ function hero(state) {
     p(state.connection === 'waiting'
       ? ['Connected to the relay. ', strong('Start bridle on your desktop'), ' to link.']
       : 'Linking to your desktop…'),
-    p({ className: 'hint' }, 'Tip: turn on conversation mode and just talk. Say "stop talking" to cut in.'),
+    p({ className: 'hint' }, 'Tip: tap the mic to go hands-free and just talk. Say "stop talking" to cut in.'),
   );
 }

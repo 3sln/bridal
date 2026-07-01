@@ -47,25 +47,34 @@ export const offer = (sdp) => ({ kind: SIGNAL_KIND.OFFER, sdp });
 export const answer = (sdp) => ({ kind: SIGNAL_KIND.ANSWER, sdp });
 export const ice = (candidate) => ({ kind: SIGNAL_KIND.ICE, candidate });
 
-// ---- room codes -------------------------------------------------------------
-// Short, unambiguous, case-insensitive codes for QR/manual entry. Crockford
-// base32 minus the easily-confused characters. We do not use Math.random's
-// quality assumptions for anything security-sensitive — the room code only has
-// to be unguessable enough to avoid casual collisions; pair authentication is
-// handled by the one-time token (see tether.js hello handshake).
+// ---- room tokens ------------------------------------------------------------
+// The value in the QR/URL (`#room=…`) is BOTH the signaling address and the
+// first-contact secret: anyone holding it can take the guest slot and reach the
+// host, whose input is piped to your agent. So it must be a real high-entropy
+// token, not a short human code — a 6-char code (~29 bits) is brute-forceable
+// and was the channel's only gate. `makeToken()` produces ~128 bits from the
+// CSPRNG. A persistent device pin (TOFU, see the HELLO handshake) is the second
+// factor that protects an already-paired tether if the token later leaks.
+//
+// Alphabet: Crockford base32 minus easily-confused characters, so a token is
+// still case-insensitive and safe to read aloud / type if ever needed.
 
 const ROOM_ALPHABET = '23456789abcdefghjkmnpqrstvwxyz';
+export const TOKEN_LENGTH = 26; // 26 * log2(30) ≈ 128 bits
 
 /**
  * @param {() => number} [rng] inject randomness (crypto in prod, seedable in tests)
  */
-export function makeRoomCode(length = 6, rng = defaultRng) {
+export function makeRoomCode(length = TOKEN_LENGTH, rng = defaultRng) {
   let out = '';
   for (let i = 0; i < length; i++) {
     out += ROOM_ALPHABET[Math.floor(rng() * ROOM_ALPHABET.length)];
   }
   return out;
 }
+
+/** A full-entropy room token — the default for a new tether. */
+export const makeToken = (rng = defaultRng) => makeRoomCode(TOKEN_LENGTH, rng);
 
 function defaultRng() {
   // Prefer a CSPRNG when present (browser + bun + workers all expose it).
@@ -78,8 +87,9 @@ function defaultRng() {
   return Math.random();
 }
 
+// Min 4 keeps legacy short rooms working; max 64 admits full-entropy tokens.
 export const isValidRoomCode = (code) =>
   typeof code === 'string' &&
   code.length >= 4 &&
-  code.length <= 16 &&
+  code.length <= 64 &&
   [...code].every((ch) => ROOM_ALPHABET.includes(ch));

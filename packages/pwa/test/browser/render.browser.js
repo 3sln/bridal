@@ -75,6 +75,6 @@ describe('individual components render', () => {
   it('statusBar reflects the connection state', () => {
     const root = mount(dd, statusBar({ connection: 'tethered', tetherLabel: 'claude · demo', room: 'ABC123' }));
     assert(root.querySelector('.status .dot.tethered'), 'dot not tethered');
-    assert(root.textContent.includes('tethered'), 'label missing');
+    assert(root.querySelector('.tether-chip')?.textContent.includes('claude · demo'), 'tether chip missing');
   });
 });

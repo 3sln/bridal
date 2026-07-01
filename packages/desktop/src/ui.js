@@ -61,10 +61,13 @@ export const ui = {
       console.log(c.dim('no setups yet — run `bridle` in a project and tether once to create one.'));
       return;
     }
-    console.log(c.bold('\n  setups\n'));
+    console.log(c.bold('\n  tethers\n'));
     for (const s of list) {
       const dot = s.status === 'active' ? c.green('●') : c.dim('○');
-      console.log(`  ${dot} ${c.bold(s.name.padEnd(16))} ${c.dim(s.status.padEnd(9))} room ${s.room}  ${c.dim(agentLabel(s.agent))}`);
+      console.log(`  ${dot} ${c.bold(s.name.padEnd(16))} ${c.dim(s.status.padEnd(9))} ${c.dim(agentLabel(s.agent))}`);
+      if (s.cwd) {
+        console.log(`    ${c.dim(s.cwd)}`);
+      }
     }
     console.log('');
   },
@@ -73,10 +76,11 @@ export const ui = {
 
 ${c.bold('usage')}
   bridle [agent] [options]               pair + run (auto-daemonizes on first tether)
+  bridle tether <name> [agent]           pair, naming the tether explicitly
   bridle [options] -- <raw cmd...>       run any other CLI in generic pipe mode
   bridle install [agent] [options]       install a setup without pairing first
-  bridle list                            list daemonized setups + status
-  bridle remove <name>                   stop + remove a setup
+  bridle list                            list your tethers + status
+  bridle remove <name>                   stop + remove a tether
   bridle daemon --setup <name>           headless run (used by the service)
 
 ${c.bold('agents')}  ${listProfiles().map((p) => p.aliases[0]).join('  ')}
@@ -85,11 +89,11 @@ ${c.bold('agents')}  ${listProfiles().map((p) => p.aliases[0]).join('  ')}
 ${c.bold('options')}
   --agent <id>      select an agent profile explicitly
   --session <id>    attach to a specific agent session
-  --new-session     start fresh instead of resuming the latest session
+  --resume          resume the latest session (default: fresh conversation)
   --backend <url>   backend base URL (default https://bridle.3sln.com)
   --local           use http://localhost:8787
-  --room <code>     fixed room code (default: random)
-  --name <name>     setup name (default: current directory name)
+  --room <token>    fixed room token (default: random high-entropy)
+  --name <name>     tether name (default: current directory name)
   --no-daemon       don't auto-install a service after first tether
   --webview         pop a native window with the pairing QR
   --no-turn         STUN only (skip public TURN)

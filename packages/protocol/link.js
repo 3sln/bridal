@@ -66,19 +66,27 @@ export const COMMAND = Object.freeze({
 
 // ---- message factories ------------------------------------------------------
 
-export const helloHost = (agent, cwd) => ({
+// The host's HELLO carries a per-connection `nonce`: the guest signs it (with
+// the token) using its persistent device key, proving possession on every
+// reconnect. The host TOFU-pins the key on first pair and rejects others after.
+export const helloHost = (agent, cwd, nonce) => ({
   t: LINK.HELLO,
   role: 'host',
   client: 'desktop',
   proto: PROTO_VERSION,
   agent,
   cwd,
+  nonce,
 });
-export const helloGuest = () => ({
+// `pubKey` (JWK) + `sig` (base64) authenticate the device to the host. Omitted
+// only when talking to a pre-pinning host, which ignores them.
+export const helloGuest = ({ pubKey, sig } = {}) => ({
   t: LINK.HELLO,
   role: 'guest',
   client: 'pwa',
   proto: PROTO_VERSION,
+  ...(pubKey ? { pubKey } : {}),
+  ...(sig ? { sig } : {}),
 });
 
 export const ping = (ts) => ({ t: LINK.PING, ts });

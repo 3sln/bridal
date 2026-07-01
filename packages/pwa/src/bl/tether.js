@@ -54,9 +54,9 @@ function resolveChoice(text, choices) {
 }
 
 export class TetherQuery extends Query {
-  static deps = ['config', 'settings', 'signaling', 'peer', 'mic', 'tts', 'stt', 'tethers'];
+  static deps = ['config', 'settings', 'signaling', 'peer', 'mic', 'tts', 'stt', 'tethers', 'identity'];
 
-  async boot({ config, settings, signaling, peer: makePeer, mic, tts, stt, tethers }, { notify, engineFeed }) {
+  async boot({ config, settings, signaling, peer: makePeer, mic, tts, stt, tethers, identity }, { notify, engineFeed }) {
     const state = {
       connection: CONNECTION.NONE,
       conversation: false,
@@ -64,7 +64,9 @@ export class TetherQuery extends Query {
       speaking: false,
       processing: false, // transcribing an utterance on-device
       sttState: 'idle', // idle | loading | ready | error
-      sttProgress: 0, // 0..100 during the one-time model download
+      sttProgress: null, // 0..100 when totals are known; null = indeterminate
+      sttBytes: 0, // bytes downloaded so far (always known, monotonic)
+      preparingVoice: false, // gating hands-free on the one-time model download
       messages: [],
       level: 0,
       error: null,
@@ -85,6 +87,7 @@ export class TetherQuery extends Query {
       activeTetherId: null,
       tetherLabel: null,
       tethersOpen: false,
+      detailsOpen: false, // the connection-details sheet (opened from the status bead)
     };
 
     // Hands-free helpers (driving / eyes-off use).
@@ -167,13 +170,25 @@ export class TetherQuery extends Query {
     });
     mic.addEventListener('utterance', (e) => transcribeUtterance(e.detail));
 
-    // Offline STT model load progress -> UI (one-time download).
+    // Offline STT model load progress -> UI (one-time download). The worker
+    // already aggregates per-file bytes into one number; clamp it monotonic here
+    // so a late-arriving file can never make the bar jump backwards.
     stt.addEventListener('progress', (e) => {
       const d = e.detail || {};
-      const pct = typeof d.progress === 'number' ? Math.round(d.progress) : state.sttProgress;
-      push({ sttState: 'loading', sttProgress: pct });
+      if (d.status === 'fallback') return;
+      const patch = { sttState: 'loading' };
+      if (typeof d.progress === 'number') patch.sttProgress = Math.max(state.sttProgress || 0, Math.round(d.progress));
+      if (typeof d.loaded === 'number') patch.sttBytes = Math.max(state.sttBytes || 0, d.loaded);
+      push(patch);
     });
     stt.addEventListener('ready', () => push({ sttState: 'ready', sttProgress: 100 }));
+    // A model-load failure (e.g. the one-time CDN download) otherwise dies in the
+    // worker with the loading banner stuck — surface it and stop conversation.
+    stt.addEventListener('error', (e) => {
+      earcon('error');
+      push({ sttState: 'error', preparingVoice: false, error: `couldn't load the speech model: ${e.detail?.message || 'fetch failed'}` });
+      if (state.conversation) stopConversation();
+    });
 
     // Transcribe locally, then decide: command (run here) or dictation (-> agent).
     async function transcribeUtterance({ blob }) {
@@ -225,9 +240,22 @@ export class TetherQuery extends Query {
     }
     function onPeerOpen() {
       push({ connection: CONNECTION.TETHERED, error: null });
-      peer.send(helloGuest());
+      // Wait for the host's HELLO (it carries the auth nonce) before replying
+      // with our signed device HELLO — see the LINK.HELLO handler.
       updateNowPlaying();
       if (settings.get('conversationOnConnect') || settings.get('drivingMode')) startConversation();
+    }
+    // Prove this device to the host: sign `${token}|${nonce}` with our persistent
+    // key. The host TOFU-pins the key on first pair and rejects any other later.
+    async function sendSignedHello(nonce) {
+      const token = tethers.active()?.room || '';
+      try {
+        const pubKey = await identity.publicKeyJwk();
+        const sig = await identity.sign(token, nonce);
+        peer?.send(helloGuest({ pubKey, sig }));
+      } catch {
+        peer?.send(helloGuest());
+      }
     }
 
     // --- tethers: connect to the active one; reconnect on switch ------------
@@ -235,6 +263,11 @@ export class TetherQuery extends Query {
     const refreshTethers = () => {
       state.tethers = tethers.list();
       state.activeTetherId = tethers.activeId;
+      // Keep the status-bar chip in sync with the active tether's label, so the
+      // desktop's friendly auto-label (agent · dir) replaces the raw room code
+      // once HELLO arrives — `change` fires without a reconnect.
+      const active = tethers.active();
+      state.tetherLabel = active ? active.label : null;
     };
     function connectActive() {
       const t = tethers.active();
@@ -279,6 +312,7 @@ export class TetherQuery extends Query {
       switch (msg.t) {
         case LINK.HELLO: {
           push({ agent: msg.agent || 'agent' });
+          sendSignedHello(msg.nonce); // authenticate this device to the host
           // Give the active tether a friendly auto-label from the desktop.
           const base = (msg.cwd || '').split(/[\\/]/).filter(Boolean).pop();
           if (state.activeTetherId) tethers.setAutoLabel(state.activeTetherId, base ? `${msg.agent} · ${base}` : msg.agent);
@@ -306,8 +340,10 @@ export class TetherQuery extends Query {
           break;
         case LINK.SESSION:
           markAssistantDone();
+          // A fresh conversation starts from a clean transcript.
+          if (!msg.resumed) state.messages = [];
           push({ currentSession: { id: msg.id, title: msg.title }, sessionsOpen: false });
-          addMessage('system', msg.resumed ? `resumed ${msg.title}` : 'new session', 'status');
+          addMessage('system', msg.resumed ? `resumed ${msg.title}` : 'new conversation', 'status');
           updateNowPlaying();
           break;
 
@@ -465,9 +501,22 @@ export class TetherQuery extends Query {
 
     // --- conversation + manual control --------------------------------------
     async function startConversation() {
+      earcons.resume(); // unlock audio for earcons within this user gesture
+      // Don't pretend we're listening before the model can actually transcribe:
+      // on first use, gate behind a full-screen "preparing voice" overlay until
+      // the one-time download finishes. Subsequent starts are instant.
+      if (stt.readyState !== 'ready') {
+        push({ preparingVoice: true, sttState: 'loading', sttProgress: null, sttBytes: 0, error: null });
+        try {
+          await stt.ensureReady();
+        } catch (err) {
+          push({ preparingVoice: false, sttState: 'error', error: `couldn't load the speech model: ${err.message}` });
+          return;
+        }
+        if (!state.preparingVoice) return; // user backed out while it loaded
+        push({ preparingVoice: false, sttState: 'ready' });
+      }
       try {
-        stt.prewarm(); // download/init the model while the user speaks the first line
-        earcons.resume(); // unlock audio for earcons within this user gesture
         await mic.start();
         if (settings.get('keepAwake') || settings.get('drivingMode')) wake.enable();
         if (settings.get('mediaControls')) media.activate(); // hold session for hw buttons
@@ -477,6 +526,9 @@ export class TetherQuery extends Query {
       } catch (err) {
         push({ error: `mic: ${err.message}` });
       }
+    }
+    function cancelPreparingVoice() {
+      push({ preparingVoice: false });
     }
     async function stopConversation() {
       await mic.stop();
@@ -530,6 +582,9 @@ export class TetherQuery extends Query {
           break;
         case 'toggle-conversation':
           state.conversation ? stopConversation() : startConversation();
+          break;
+        case 'cancel-voice-prep':
+          cancelPreparingVoice();
           break;
         case 'toggle-listening':
           toggleListening();
@@ -596,6 +651,9 @@ export class TetherQuery extends Query {
         case 'set-tethers-sheet':
           push({ tethersOpen: !!it.open });
           break;
+        case 'set-details-sheet':
+          push({ detailsOpen: !!it.open });
+          break;
         default:
           break;
       }
@@ -651,6 +709,9 @@ class IntentOnly extends Action {
 }
 export class ToggleConversationAction extends IntentOnly {
   intent = { type: 'toggle-conversation' };
+}
+export class CancelVoicePrepAction extends IntentOnly {
+  intent = { type: 'cancel-voice-prep' };
 }
 export class ToggleListeningAction extends IntentOnly {
   intent = { type: 'toggle-listening' };
@@ -718,6 +779,12 @@ export class OpenTethersAction extends IntentOnly {
 }
 export class CloseTethersAction extends IntentOnly {
   intent = { type: 'set-tethers-sheet', open: false };
+}
+export class OpenDetailsAction extends IntentOnly {
+  intent = { type: 'set-details-sheet', open: true };
+}
+export class CloseDetailsAction extends IntentOnly {
+  intent = { type: 'set-details-sheet', open: false };
 }
 export class SwitchTetherAction extends Action {
   constructor(id) {

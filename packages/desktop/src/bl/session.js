@@ -18,8 +18,10 @@
 import { Query } from '@3sln/ngin';
 import {
   LINK,
+  LEVEL,
   COMMAND,
   helloHost,
+  notice,
   output,
   status,
   pong,
@@ -27,6 +29,7 @@ import {
   session as mkSession,
 } from '@bridle/protocol/link';
 import { answer as mkAnswer } from '@bridle/protocol/signaling';
+import { fingerprintJwk, verifySignature } from '@bridle/protocol/identity';
 import { McpServer } from '../mcp.js';
 
 export const PHASE = Object.freeze({
@@ -39,9 +42,9 @@ export const PHASE = Object.freeze({
 });
 
 export class SessionQuery extends Query {
-  static deps = ['config', 'agent', 'signaling', 'peer', 'frontend'];
+  static deps = ['config', 'agent', 'signaling', 'peer', 'frontend', 'registry'];
 
-  async boot({ config, agent, signaling, peer: makePeer, frontend }, { notify, engineFeed }) {
+  async boot({ config, agent, signaling, peer: makePeer, frontend, registry }, { notify, engineFeed }) {
     const echo = (type, detail) => engineFeed.dispatchEvent(new CustomEvent(type, { detail }));
 
     // MCP server: lets the agent drive the phone front-end (audio/images/ask/…).
@@ -74,6 +77,9 @@ export class SessionQuery extends Query {
 
     let outBuffer = ''; // agent output produced before a channel is open
     let peer = null; // the live HostPeer for the current connection
+    let authed = false; // has the current peer proven its pinned device identity?
+    let nonce = null; // per-connection challenge the guest must sign
+    let pinnedFingerprint = await registry.getPin(config.room); // TOFU device pin
     let currentSessionId = null;
     const sessionTitles = new Map();
     const baseCleanups = [];
@@ -88,7 +94,8 @@ export class SessionQuery extends Query {
     push({ agentState: 'running' });
     onBase(agent, 'output', (e) => {
       const { text, stream } = e.detail;
-      if (!(peer && peer.send(output(text, stream)))) outBuffer += text;
+      // Only stream to a verified peer; otherwise buffer until one authenticates.
+      if (!(authed && peer && peer.send(output(text, stream)))) outBuffer += text;
       echo('agent-output', { text, stream });
     });
     onBase(agent, 'exit', (e) => {
@@ -120,6 +127,8 @@ export class SessionQuery extends Query {
     function teardownPeer() {
       for (const off of peerCleanups.splice(0)) off();
       frontend.detach();
+      authed = false;
+      nonce = null;
       if (peer) {
         try {
           peer.close();
@@ -138,18 +147,47 @@ export class SessionQuery extends Query {
       };
       on('state', (e) => push({ ice: e.detail.state }));
       on('open', () => {
-        peer.send(helloHost(config.agent.label, config.agent.cwd));
-        if (outBuffer) {
-          peer.send(output(outBuffer));
-          outBuffer = '';
-        }
-        push({ phase: PHASE.TETHERED });
-        frontend.attach(peer); // the agent's MCP tools now reach this phone
-        // Default: resume the latest session they had going; inject the primer.
-        attachSession(undefined);
+        // Challenge the phone, but reveal nothing (no agent output, no front-end,
+        // no session) until it proves the pinned device identity — see HELLO.
+        nonce = crypto.randomUUID();
+        peer.send(helloHost(config.agent.label, config.agent.cwd, nonce));
       });
       on('closed', () => push({ phase: PHASE.PEER_LEFT }));
       on('message', (e) => handleLink(e.detail.msg));
+    }
+
+    // The guest passed the challenge: open the tether for real.
+    function admitGuest(guestName) {
+      authed = true;
+      push({ phase: PHASE.TETHERED, guest: guestName || 'phone' });
+      if (outBuffer) {
+        peer.send(output(outBuffer));
+        outBuffer = '';
+      }
+      frontend.attach(peer); // the agent's MCP tools now reach this phone
+      // First connect: start fresh (never silently resume an unrelated chat).
+      // Reconnects: continue whatever session this tether was already on, so a
+      // network blip doesn't drop you into a new conversation mid-task.
+      attachSession(currentSessionId || undefined);
+    }
+
+    // Verify the guest's signature over our nonce and enforce the device pin
+    // (trust-on-first-use). Returns true only for the pinned device.
+    async function verifyGuest(msg) {
+      if (!msg.pubKey || !msg.sig) return false;
+      if (!(await verifySignature(msg.pubKey, msg.sig, config.room, nonce))) return false;
+      let fp;
+      try {
+        fp = await fingerprintJwk(msg.pubKey);
+      } catch {
+        return false;
+      }
+      if (!pinnedFingerprint) {
+        pinnedFingerprint = fp;
+        await registry.savePin(config.room, fp).catch(() => {});
+        return true;
+      }
+      return pinnedFingerprint === fp;
     }
 
     // --- signaling <-> peer negotiation -------------------------------------
@@ -174,10 +212,21 @@ export class SessionQuery extends Query {
     });
 
     async function handleLink(msg) {
+      // Until the device is verified, the only message we act on is its HELLO.
+      if (!authed && msg.t !== LINK.HELLO) return;
       switch (msg.t) {
-        case LINK.HELLO:
-          push({ guest: msg.client || 'phone' });
+        case LINK.HELLO: {
+          const ok = await verifyGuest(msg);
+          if (!ok) {
+            peer?.send(notice('This device isn’t paired with this tether. Re-scan the QR on the desktop to pair it.', LEVEL.ERROR));
+            echo('agent-output', { text: '\n[bridle] rejected an unrecognized device.\n', stream: 'stderr' });
+            teardownPeer();
+            push({ phase: PHASE.PEER_LEFT, guest: null });
+            return;
+          }
+          admitGuest(msg.client);
           break;
+        }
         case LINK.TEXT:
           agent.write(msg.text.endsWith('\n') ? msg.text : msg.text + '\n');
           echo('guest-input', { text: msg.text });

@@ -15,6 +15,8 @@ export class Stt extends EventTarget {
     this.audioCtx = null;
     this.seq = 0;
     this.pending = new Map();
+    this.readyState = 'idle'; // idle | loading | ready | error
+    this.readyWaiters = []; // { resolve, reject } awaiting the one-time load
   }
 
   get device() {
@@ -26,9 +28,14 @@ export class Stt extends EventTarget {
     this.worker = new Worker(new URL('../stt-worker.js', import.meta.url), { type: 'module' });
     this.worker.onmessage = (e) => {
       const m = e.data || {};
-      if (m.type === 'progress') this.emit('progress', m.data);
-      else if (m.type === 'ready') this.emit('ready', {});
-      else if (m.type === 'result') {
+      if (m.type === 'progress') {
+        if (m.data?.status !== 'fallback') this.readyState = 'loading';
+        this.emit('progress', m.data);
+      } else if (m.type === 'ready') {
+        this.readyState = 'ready';
+        this.#flushWaiters((w) => w.resolve());
+        this.emit('ready', {});
+      } else if (m.type === 'result') {
         this.pending.get(m.id)?.resolve(m.text);
         this.pending.delete(m.id);
       } else if (m.type === 'error') {
@@ -37,16 +44,35 @@ export class Stt extends EventTarget {
           p.reject(new Error(m.message));
           this.pending.delete(m.id);
         } else {
+          this.readyState = 'error';
+          const err = new Error(m.message);
+          this.#flushWaiters((w) => w.reject(err));
           this.emit('error', { message: m.message });
         }
       }
     };
   }
 
+  #flushWaiters(fn) {
+    const waiters = this.readyWaiters.splice(0);
+    waiters.forEach(fn);
+  }
+
   /** Start downloading/initializing the model so the first utterance is fast. */
   prewarm() {
+    if (this.readyState === 'ready') return;
     this.#ensureWorker();
+    this.readyState = 'loading';
     this.worker.postMessage({ type: 'load', model: this.getModel(), device: this.device });
+  }
+
+  /** Resolve once the model is loaded (kicking off the load if needed); rejects
+   *  if the one-time download fails. Used to gate hands-free mode on readiness. */
+  ensureReady() {
+    if (this.readyState === 'ready') return Promise.resolve();
+    const p = new Promise((resolve, reject) => this.readyWaiters.push({ resolve, reject }));
+    this.prewarm();
+    return p;
   }
 
   async transcribe(blob) {
