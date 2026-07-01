@@ -165,7 +165,7 @@ export class AgentRunner extends EventTarget {
 
   #spawnPersistent() {
     if (this.running) return;
-    this.proc = Bun.spawn(this.profile.command, {
+    this.proc = Bun.spawn([...this.profile.command, ...(this.profile.modeArgs || [])], {
       cwd: this.cwd,
       env: this.env,
       stdin: 'pipe',
@@ -193,7 +193,7 @@ export class AgentRunner extends EventTarget {
     const mcpArgs = await this.#mcpArgs();
     let proc;
     try {
-      proc = Bun.spawn([...this.profile.command, ...mcpArgs, ...args], {
+      proc = Bun.spawn([...this.profile.command, ...(this.profile.modeArgs || []), ...mcpArgs, ...args], {
         cwd: this.cwd,
         env: this.env,
         stdin: stdinFromNull ? 'ignore' : 'pipe',

@@ -6,6 +6,7 @@ import { platformName } from './service.js';
 import { listProfiles } from './agents.js';
 
 const agentLabel = (a) => (!a ? '?' : a.id === 'custom' || !a.id ? (a.command || []).join(' ') : a.id);
+const claudeModes = () => listProfiles().find((p) => p.id === 'claude')?.modes || {};
 
 const c = {
   dim: (s) => `\x1b[2m${s}\x1b[0m`,
@@ -23,7 +24,7 @@ export const ui = {
     console.log(await terminalQR(config.pwaUrl));
     console.log(`  scan ↑   or open  ${c.ul(config.pwaUrl)}`);
     console.log(`  room     ${c.bold(config.room)}`);
-    console.log(`  agent    ${config.agent.label} ${c.dim(`(${config.agent.mode}, ${config.agent.tier})`)}`);
+    console.log(`  agent    ${config.agent.label}${config.agent.modeName ? c.cyan(` · ${config.agent.modeName} mode`) : ''} ${c.dim(`(${config.agent.mode}, ${config.agent.tier})`)}`);
     console.log(c.dim(`  session  ${config.session.fresh ? 'new' : config.session.id || 'resume latest'} — primed for voice on connect`));
     console.log(`  daemon   ${config.autoDaemon ? `auto (${platformName()}) after first tether` : 'off (--no-daemon)'}`);
     console.log(c.dim('  voice    on-device (browser Whisper) — no API key needed'));
@@ -85,6 +86,13 @@ export const ui = {
     }
     console.log('');
   },
+  needAgent(name) {
+    const n = name || '<name>';
+    console.error(c.red('✗ pick an agent — bridle has no default.'));
+    console.log(`  usage:  ${c.bold(`bridle tether ${n} <agent>`)}`);
+    console.log(`  agents: ${listProfiles().map((p) => p.aliases[0]).join('  ')}`);
+    console.log(c.dim(`  or tether any CLI:  bridle tether ${n} -- <cmd…>`));
+  },
   help() {
     console.log(`${c.bold('bridle')} — tether an AI agent CLI to your phone
 
@@ -102,6 +110,7 @@ ${c.bold('agents')}  ${listProfiles().map((p) => p.aliases[0]).join('  ')}
   ${c.dim('in ~/.config/bridle/profiles.json (see the README).')}
 
 ${c.bold('options')} ${c.dim('(for `tether`)')}
+  --mode <name>     select an agent run mode (e.g. claude: ${Object.keys(claudeModes()).join(', ') || '—'})
   --resume          resume the latest session (default: fresh conversation)
   --session <id>    attach to a specific agent session
   --backend <url>   backend base URL (default https://bridle.3sln.com)

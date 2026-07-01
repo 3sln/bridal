@@ -37,7 +37,7 @@
 import { basename } from 'node:path';
 import { makeToken } from '@bridle/protocol/signaling';
 import { DEFAULT_ICE_SERVERS, STUN_SERVERS } from '@bridle/protocol/ice';
-import { resolveAgent, DEFAULT_AGENT } from './agents.js';
+import { resolveAgent } from './agents.js';
 
 const DEFAULT_BACKEND = 'https://bridle.3sln.com';
 export const KNOWN_SUBS = new Set(['tether', 'daemonize', 'list', 'remove', 'rm', 'daemon', 'help']);
@@ -72,7 +72,10 @@ export function parseArgs(argv = process.argv.slice(2)) {
 export function loadConfig(parsed = parseArgs(), env = process.env) {
   const { get, has, agentCmd, agentName, tetherName } = parsed;
 
-  const profile = resolveAgent(agentCmd ? { command: agentCmd } : { id: get('--agent') || agentName || DEFAULT_AGENT });
+  // No default agent: an agent is chosen explicitly (a profile id or `-- <cmd>`).
+  // cmdPair validates that one was given, so we never privilege a particular one.
+  const requested = get('--agent') || agentName;
+  const profile = agentCmd ? resolveAgent({ command: agentCmd }) : requested ? resolveAgent({ id: requested }) : null;
 
   let backend = get('--backend') || env.BRIDLE_BACKEND_URL || DEFAULT_BACKEND;
   if (has('--local')) backend = 'http://localhost:8787';
@@ -81,13 +84,14 @@ export function loadConfig(parsed = parseArgs(), env = process.env) {
   const room = get('--room') || env.BRIDLE_ROOM || makeToken();
   const turn = !has('--no-turn');
   const name = get('--name') || tetherName || basename(process.cwd()) || 'default';
+  const modeName = get('--mode') || null;
 
   return {
     name,
     room,
     backendUrl: backend,
     pwaUrl: `${backend}/#room=${room}`,
-    agent: { ...profile, cwd: process.cwd() },
+    agent: profile ? { ...profile, cwd: process.cwd(), modeName, modeArgs: profile.modes?.[modeName] || [] } : null,
     session: {
       id: get('--session') || null,
       // Default to a fresh conversation. Resuming the latest session silently
@@ -114,7 +118,7 @@ export function configFromSetup(setup, env = process.env) {
     room: setup.room,
     backendUrl: backend,
     pwaUrl: `${backend}/#room=${setup.room}`,
-    agent: { ...profile, cwd: setup.cwd || process.cwd() },
+    agent: { ...profile, cwd: setup.cwd || process.cwd(), modeName: a.mode || null, modeArgs: profile.modes?.[a.mode] || [] },
     session: { id: null, fresh: true, attachLatest: false },
     iceServers: DEFAULT_ICE_SERVERS,
     mcp: { enabled: true, port: 0 },

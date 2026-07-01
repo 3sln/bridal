@@ -68,6 +68,14 @@ switch (parsed.sub) {
 // --- pair: foreground run, QR, auto-daemonize on first tether ---------------
 async function cmdPair() {
   const config = loadConfig(parsed);
+  if (!config.agent) {
+    ui.needAgent(parsed.tetherName);
+    process.exit(1);
+  }
+  const { modeName, modes } = config.agent;
+  if (modeName && !modes?.[modeName]) {
+    fail(`unknown mode "${modeName}" for ${config.agent.id}. available: ${Object.keys(modes || {}).join(', ') || '(none)'}`);
+  }
   const engine = buildEngine(config);
   await ui.banner(config, terminalQR);
   if (config.webview) {

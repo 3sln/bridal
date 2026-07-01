@@ -39,6 +39,14 @@ const BUILTIN_PROFILES = {
     command: ['claude'],
     mode: 'oneshot',
     tier: 'enhanced',
+    // Selectable run modes (extra flags): `bridle tether <name> claude --mode yolo`.
+    // NOTE: an `auto` (classifier) mode belongs here too — pending the exact CLI
+    // flag; users can already add it via profiles.json without a code change.
+    modes: {
+      edits: ['--permission-mode', 'acceptEdits'], // auto-accept edits, still gated on risky ops
+      yolo: ['--dangerously-skip-permissions'], // no prompts at all — use with care
+      plan: ['--permission-mode', 'plan'], // plan-only, makes no changes
+    },
     setsSessionId: true, // we choose the UUID
     turn: ({ prompt, first, sessionId }) => ({
       args: ['-p', ...(first ? ['--session-id', sessionId] : ['--resume', sessionId]), prompt],
@@ -209,6 +217,9 @@ export function normalizeCustomProfile(id, def) {
     streamStderr: def.streamStderr ?? mode === 'pipe',
     listSessions: () => [],
   };
+  if (def.modes && typeof def.modes === 'object') {
+    profile.modes = def.modes; // { name: [extra, args] }
+  }
   if (mode === 'oneshot') {
     const promptArgs = Array.isArray(def.promptArgs) ? def.promptArgs : ['{prompt}'];
     const resumeArgs = Array.isArray(def.resumeArgs) ? def.resumeArgs : promptArgs;

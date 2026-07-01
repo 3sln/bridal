@@ -12,10 +12,20 @@ test('`tether <name> <agent>` names the tether and selects the agent', () => {
   expect(cfg.agent.id).toBe('codex');
 });
 
-test('`tether <name>` defaults the agent to claude', () => {
+test('no default agent — omitting it yields a null agent (cmdPair errors)', () => {
   const cfg = loadConfig(parseArgs(['tether', 'work']), {});
   expect(cfg.name).toBe('work');
-  expect(cfg.agent.id).toBe('claude');
+  expect(cfg.agent).toBeNull();
+});
+
+test('--mode resolves the profile mode flags', () => {
+  const cfg = loadConfig(parseArgs(['tether', 'work', 'claude', '--mode', 'yolo']), {});
+  expect(cfg.agent.modeName).toBe('yolo');
+  expect(cfg.agent.modeArgs).toEqual(['--dangerously-skip-permissions']);
+  // unknown mode surfaces as empty args; cmdPair validates against agent.modes
+  const bad = loadConfig(parseArgs(['tether', 'work', 'claude', '--mode', 'nope']), {});
+  expect(bad.agent.modeArgs).toEqual([]);
+  expect(bad.agent.modes.nope).toBeUndefined();
 });
 
 test('bare / unknown → dashboard; explicit help → help', () => {
