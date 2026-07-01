@@ -167,6 +167,9 @@ const taskScheduler = {
       '/Create', '/TN', TASK(name), '/TR', tr, '/SC', 'ONLOGON', '/RL', 'LIMITED', '/F',
     ]);
     if (code !== 0) throw new Error(`schtasks create failed: ${err}`);
+    // ONLOGON only registers it for future logins — start it now too, or the
+    // tether stays dark (phone stuck "waiting for desktop") until the next logon.
+    await run('schtasks', ['/Run', '/TN', TASK(name)]).catch(() => {});
     return { manager: 'task-scheduler', path: TASK(name) };
   },
   async uninstall(name) {

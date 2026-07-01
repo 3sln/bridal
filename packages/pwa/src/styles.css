@@ -68,10 +68,10 @@ body {
   position: sticky; top: 0; z-index: 5;
   min-height: 56px;
 }
-.status-id { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; }
+.status-id { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; overflow: hidden; }
 .bead { appearance: none; border: 0; background: transparent; padding: 6px; margin: -6px; border-radius: 50%; cursor: pointer; display: grid; place-items: center; flex: none; }
 .bead:active { transform: scale(.9); }
-.status-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+.status-actions { display: flex; align-items: center; gap: 4px; flex: none; padding-left: 4px; }
 .status .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none; transition: background .3s, box-shadow .3s; }
 .status .dot.tethered { background: var(--green); box-shadow: 0 0 0 3px rgba(52, 211, 153, .18), 0 0 12px var(--green); }
 .status .dot.connecting, .status .dot.negotiating, .status .dot.reconnecting { background: var(--amber); box-shadow: 0 0 0 3px rgba(251, 191, 36, .15); animation: blink 1.2s ease-in-out infinite; }
@@ -79,7 +79,7 @@ body {
 .status .dot.error { background: var(--red); }
 @keyframes blink { 50% { opacity: .35; } }
 
-.status-label { color: var(--muted); font-size: 14px; white-space: nowrap; }
+.status-label { color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .tether-chip {
   appearance: none; cursor: pointer;
   display: inline-flex; align-items: center; gap: 6px;
