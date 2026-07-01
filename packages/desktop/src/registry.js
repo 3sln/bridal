@@ -6,7 +6,7 @@
 // sibling per-setup env file with tight permissions, never in the JSON.
 
 import { mkdir, readFile, writeFile, rm, chmod } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -135,3 +135,51 @@ export async function writeEnvFile(name, env) {
 }
 
 export const hasEnvFile = (name) => existsSync(envFileFor(name));
+
+// --- daemon single-instance lock --------------------------------------------
+// One running daemon per tether, however it was launched (scheduled service or
+// the transient background fallback). A PID file in the config dir is the lock;
+// a stale file (dead PID) is ignored so a crash never wedges the tether.
+const lockFile = (name) => join(configDir(), `${safeName(name)}.pid`);
+
+function pidAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM'; // exists but not signalable == alive
+  }
+}
+
+/** True if a live daemon already holds this tether's lock. */
+export function daemonRunning(name) {
+  try {
+    return pidAlive(Number(readFileSync(lockFile(name), 'utf8').trim()));
+  } catch {
+    return false;
+  }
+}
+
+/** Claim the lock for this process; false if another live daemon holds it. */
+export function acquireDaemonLock(name) {
+  if (daemonRunning(name)) return false;
+  try {
+    mkdirSync(configDir(), { recursive: true });
+    writeFileSync(lockFile(name), String(process.pid));
+    return true;
+  } catch {
+    return true; // can't write a lock — proceed rather than block the tether
+  }
+}
+
+/** Release the lock if we own it (safe to call from an exit handler). */
+export function releaseDaemonLock(name) {
+  try {
+    if (Number(readFileSync(lockFile(name), 'utf8').trim()) === process.pid) {
+      rmSync(lockFile(name), { force: true });
+    }
+  } catch {
+    /* nothing to release */
+  }
+}

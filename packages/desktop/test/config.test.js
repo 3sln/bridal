@@ -18,11 +18,17 @@ test('`tether <name>` defaults the agent to claude', () => {
   expect(cfg.agent.id).toBe('claude');
 });
 
-test('a bare agent name still works and is not treated as a tether name', () => {
-  const parsed = parseArgs(['codex']);
-  expect(parsed.sub).toBe('pair');
-  expect(parsed.tetherName).toBeNull();
-  expect(parsed.agentName).toBe('codex');
+test('bare / unknown invocations fall through to help', () => {
+  expect(parseArgs([]).sub).toBe('help');
+  expect(parseArgs(['codex']).sub).toBe('help'); // not a subcommand → help
+  expect(parseArgs(['--help']).sub).toBe('help');
+});
+
+test('`tether <name> -- <cmd...>` tethers an arbitrary CLI', () => {
+  const cfg = loadConfig(parseArgs(['tether', 'proj', '--', 'my-cli', '--flag']), {});
+  expect(cfg.name).toBe('proj');
+  expect(cfg.agent.mode).toBe('pipe');
+  expect(cfg.agent.command).toEqual(['my-cli', '--flag']);
 });
 
 test('default session is a fresh conversation; --resume opts in', () => {

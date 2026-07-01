@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
 // Bridle desktop CLI dispatcher. Subcommands:
-//   pair (default) | install | list | remove <name> | daemon --setup <name>
+//   tether <name> [agent] | daemonize [name] | list | remove <name>
+//   daemon --setup <name> (internal) | help
 //
 // Compile to a single binary with:  bun build src/index.js --compile --outfile bridle
 
 import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { Engine, Provider } from '@3sln/ngin';
 import { parseArgs, loadConfig, configFromSetup } from './config.js';
 import {
@@ -15,8 +17,9 @@ import {
   ServiceProvider,
   FrontendProvider,
 } from './providers.js';
-import { SetupsQuery, RemoveSetupAction, InstallSetupAction } from './bl/setups.js';
-import { getSetup, envFileFor } from './registry.js';
+import { SetupsQuery, RemoveSetupAction } from './bl/setups.js';
+import { getSetup, envFileFor, acquireDaemonLock, releaseDaemonLock } from './registry.js';
+import { installService } from './service.js';
 import { runSession } from './run.js';
 import { terminalQR, openWebviewQR } from './qr.js';
 import { ui } from './ui.js';
@@ -48,19 +51,15 @@ switch (parsed.sub) {
   case 'tether':
     await cmdPair();
     break;
-  case 'install':
-    await cmdInstall();
+  case 'daemonize':
+    await cmdDaemonize(parsed.tetherName);
     break;
   case 'daemon':
     await cmdDaemon(parsed.get('--setup'));
     break;
   case 'help':
-  case '--help':
-  case '-h':
-    ui.help();
-    break;
   default:
-    await cmdPair();
+    ui.help();
     break;
 }
 
@@ -72,9 +71,31 @@ async function cmdPair() {
   if (config.webview) {
     openWebviewQR(config.pwaUrl).then((ok) => !ok && ui.note('(webview unavailable — using terminal QR)'));
   }
-  const { reason } = await runSession(engine, config, { ui });
+  const { reason, already } = await runSession(engine, config, { ui });
   if (reason === 'daemonized') ui.handedOff();
+  else if (reason === 'fallback-daemon') ui.fallbackDaemon(already, config.name);
   await engine.dispose();
+  process.exit(0);
+}
+
+// --- daemonize: register the persistent service for an existing tether -------
+// Meant to be run from a console opened as administrator (where a locked-down
+// machine will let the task be registered). Falls back to a clear message when
+// it isn't elevated.
+async function cmdDaemonize(name) {
+  name = name || basename(process.cwd());
+  const setup = await getSetup(name);
+  if (!setup) {
+    fail(`no tether named "${name}". create one first:  bridle tether ${name} <agent>`);
+  }
+  try {
+    const svc = await installService(setup.name);
+    ui.installed({ setup, service: svc });
+    ui.note('daemonized — this tether will keep running across logins.');
+  } catch (err) {
+    fail(`couldn't register the background service: ${err.message}\n  open PowerShell as administrator, then run:  bridle daemonize ${name}`);
+  }
+  await new Promise((r) => setTimeout(r, 200));
   process.exit(0);
 }
 
@@ -83,12 +104,20 @@ async function cmdDaemon(name) {
   if (!name) fail('daemon mode requires --setup <name>');
   const setup = await getSetup(name);
   if (!setup) fail(`no such setup: ${name}`);
+  // One daemon per tether — whether launched by the service or the fallback.
+  if (!acquireDaemonLock(setup.name)) {
+    ui.note(`a bridle daemon for "${setup.name}" is already running — exiting.`);
+    process.exit(0);
+  }
+  const release = () => releaseDaemonLock(setup.name);
+  process.on('exit', release);
   await loadEnvFile(envFileFor(setup.name));
   const config = configFromSetup(setup);
   const engine = buildEngine(config);
   ui.note(`bridle daemon for "${setup.name}" — room ${setup.room}, agent ${setup.agent?.id || (setup.agent?.command || []).join(' ')}`);
   await runSession(engine, config, { ui: ui.quiet });
   await engine.dispose();
+  release();
   process.exit(0);
 }
 
@@ -117,29 +146,6 @@ async function cmdRemove(name) {
     feed.addEventListener('complete', resolve);
     feed.addEventListener('error', (e) => reject(e.error));
   }).catch((err) => fail(err.message));
-  await engine.dispose();
-  process.exit(0);
-}
-
-// --- install (without pairing first) ----------------------------------------
-async function cmdInstall() {
-  const config = loadConfig(parsed);
-  const engine = buildEngine(config);
-  const feed = engine.dispatch(
-    new InstallSetupAction({
-      name: config.name,
-      room: config.room,
-      agent: { id: config.agent.id, command: config.agent.command },
-      cwd: config.agent.cwd,
-      backendUrl: config.backendUrl,
-    }),
-  );
-  await new Promise((resolve, reject) => {
-    feed.addEventListener('installed', (e) => ui.installed(e.detail));
-    feed.addEventListener('complete', resolve);
-    feed.addEventListener('error', (e) => reject(e.error));
-  }).catch((err) => fail(err.message));
-  ui.note(`open ${config.pwaUrl} on your phone to tether (room ${config.room}).`);
   await engine.dispose();
   process.exit(0);
 }

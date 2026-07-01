@@ -56,6 +56,14 @@ export const ui = {
     console.log(c.green('✓ handed off to the background service — it will keep this tether alive.'));
     console.log(c.dim('  manage it with:  bridle list   /   bridle remove <name>'));
   },
+  fallbackDaemon(already, name) {
+    console.log(already
+      ? c.green('✓ a background server for this tether is already running — your phone stays connected.')
+      : c.green('✓ started a background server for this tether — your phone stays connected.'));
+    console.log(c.dim("  it's not permanent yet (stops when you log out or reboot)."));
+    console.log(`  to keep it running across logins, open ${c.bold('PowerShell as administrator')} and run:`);
+    console.log(`      ${c.cyan(`bridle daemonize ${name || ''}`.trim())}`);
+  },
   setups(list) {
     if (!list.length) {
       console.log(c.dim('no setups yet — run `bridle` in a project and tether once to create one.'));
@@ -75,26 +83,24 @@ export const ui = {
     console.log(`${c.bold('bridle')} — tether an AI agent CLI to your phone
 
 ${c.bold('usage')}
-  bridle [agent] [options]               pair + run (auto-daemonizes on first tether)
-  bridle tether <name> [agent]           pair, naming the tether explicitly
-  bridle [options] -- <raw cmd...>       run any other CLI in generic pipe mode
-  bridle install [agent] [options]       install a setup without pairing first
+  bridle tether <name> [agent]           create a tether + pair your phone (scan the QR)
+  bridle tether <name> -- <cmd...>        …tethering an arbitrary CLI instead of a profile
+  bridle daemonize [name]                 keep a tether running across logins
+                                          ${c.dim('(run from PowerShell opened as administrator)')}
   bridle list                            list your tethers + status
   bridle remove <name>                   stop + remove a tether
-  bridle daemon --setup <name>           headless run (used by the service)
+  bridle help                            show this help
 
 ${c.bold('agents')}  ${listProfiles().map((p) => p.aliases[0]).join('  ')}
-  ${c.dim('default: claude. unknown commands run in generic pipe mode via `--`.')}
+  ${c.dim('default: claude. use `-- <cmd...>` to tether any other CLI.')}
 
-${c.bold('options')}
-  --agent <id>      select an agent profile explicitly
-  --session <id>    attach to a specific agent session
+${c.bold('options')} ${c.dim('(for `tether`)')}
   --resume          resume the latest session (default: fresh conversation)
+  --session <id>    attach to a specific agent session
   --backend <url>   backend base URL (default https://bridle.3sln.com)
   --local           use http://localhost:8787
   --room <token>    fixed room token (default: random high-entropy)
-  --name <name>     tether name (default: current directory name)
-  --no-daemon       don't auto-install a service after first tether
+  --no-daemon       don't try to install a background service
   --webview         pop a native window with the pairing QR
   --no-turn         STUN only (skip public TURN)
 
@@ -113,6 +119,7 @@ ui.quiet = {
   installed: () => {},
   removed: () => {},
   handedOff: () => {},
+  fallbackDaemon: () => {},
   setups: () => {},
   help: () => {},
 };

@@ -3,12 +3,12 @@
 // object that becomes a singleton ngin provider.
 //
 // Usage:
-//   bridle [agent] [options] [-- <raw cmd...>]   pair + run (auto-daemonizes)
-//   bridle tether <name> [agent] [options]       pair, naming the tether explicitly
-//   bridle list                                  list daemonized setups
-//   bridle remove <name>                         stop + remove a setup
-//   bridle install [agent] [options]             install a setup without pairing
+//   bridle tether <name> [agent] [-- <cmd...>]   create a tether + pair your phone
+//   bridle daemonize [name]                      keep it running (run in an admin console)
+//   bridle list                                  list your tethers
+//   bridle remove <name>                         stop + remove a tether
 //   bridle daemon --setup <name>                 headless run (used by the service)
+//   bridle help                                  show help
 //
 // Tethers are not deduplicated: multiple can coexist on one machine, each tied to
 // the directory it was created in. Re-pairing the same directory updates it in
@@ -40,7 +40,7 @@ import { DEFAULT_ICE_SERVERS, STUN_SERVERS } from '@bridle/protocol/ice';
 import { resolveAgent, DEFAULT_AGENT } from './agents.js';
 
 const DEFAULT_BACKEND = 'https://bridle.3sln.com';
-export const KNOWN_SUBS = new Set(['pair', 'tether', 'install', 'list', 'remove', 'rm', 'daemon', 'help']);
+export const KNOWN_SUBS = new Set(['tether', 'daemonize', 'list', 'remove', 'rm', 'daemon', 'help']);
 
 export function parseArgs(argv = process.argv.slice(2)) {
   const dashDash = argv.indexOf('--');
@@ -48,8 +48,9 @@ export function parseArgs(argv = process.argv.slice(2)) {
   const agentCmd = dashDash >= 0 && argv.length > dashDash + 1 ? argv.slice(dashDash + 1) : null;
 
   const first = head[0] && !head[0].startsWith('-') ? head[0] : null;
-  const sub = first && KNOWN_SUBS.has(first) ? first : 'pair';
-  const opts = first ? head.slice(1) : head;
+  // Anything that isn't a known subcommand (including a bare `bridle`) shows help.
+  const sub = first && KNOWN_SUBS.has(first) ? first : 'help';
+  const opts = sub !== 'help' ? head.slice(1) : head;
 
   const get = (name) => {
     const i = opts.indexOf(name);
@@ -58,11 +59,10 @@ export function parseArgs(argv = process.argv.slice(2)) {
   const has = (name) => opts.includes(name);
   const positional = opts.filter((a) => !a.startsWith('-'));
 
-  // `bridle tether <name> [agent]` names the tether explicitly; positional[0] is
-  // the name, positional[1] (if any) the agent. Otherwise a leading non-flag
-  // token that isn't a subcommand is the agent name (`bridle codex`).
-  const tetherName = sub === 'tether' ? positional[0] || null : null;
-  const agentName = sub === 'tether' ? positional[1] || null : first && !KNOWN_SUBS.has(first) ? first : null;
+  // `bridle tether <name> [agent]`: positional[0] is the name, positional[1] the
+  // agent profile; `-- <cmd...>` runs an arbitrary CLI in generic pipe mode.
+  const tetherName = positional[0] || null;
+  const agentName = sub === 'tether' ? positional[1] || null : null;
 
   return { sub, tetherName, agentName, get, has, positional, agentCmd };
 }
