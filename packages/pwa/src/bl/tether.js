@@ -116,6 +116,13 @@ export class TetherQuery extends Query {
     let replyPending = false; // we sent input and are awaiting the agent's reply
     let flushTimer = null;
     let lastLevelNotify = 0;
+    // Accumulate real-speech snippets; send after a gap of no NEW speech. Noise
+    // snippets are dropped and never restart this timer, so background noise can't
+    // hold the utterance open — the gap is measured on speech, not on sound.
+    let speechParts = [];
+    let sendTimer = null;
+    let lastSpeechEndedAt = 0;
+    let pendingSnippets = 0; // VAD snippets still transcribing (don't send mid-flight)
 
     // --- messages -----------------------------------------------------------
     const addMessage = (role, content, kind, extra) => {
@@ -196,18 +203,63 @@ export class TetherQuery extends Query {
       if (state.conversation) stopConversation();
     });
 
-    // Transcribe locally, then decide: command (run here) or dictation (-> agent).
-    async function transcribeUtterance({ blob }) {
+    // Transcribe a snippet locally. Push-to-talk clips send immediately; VAD
+    // snippets feed the speech-gap accumulator (noise never triggers a send).
+    async function transcribeUtterance({ blob, manual, endedAt }) {
       push({ processing: true });
-      earcon('think');
+      if (!manual) pendingSnippets++;
       try {
         const heard = await stt.transcribe(blob);
         push({ processing: false, sttState: 'ready' });
-        onTranscript(heard);
+        if (manual) {
+          onTranscript(heard);
+        } else {
+          onSpeechSnippet(heard, endedAt);
+        }
       } catch (err) {
         earcon('error');
         push({ processing: false, sttState: 'error', error: `speech: ${err.message}` });
+      } finally {
+        if (!manual) pendingSnippets = Math.max(0, pendingSnippets - 1);
       }
+    }
+
+    // A VAD snippet finished transcribing: keep it only if it's real speech,
+    // then (re)arm the send timer. A blank/noise snippet is dropped and does NOT
+    // reset the timer, so a pause between real words still sends on schedule.
+    // The timer is scheduled from when speech ENDED (not now), so transcription
+    // latency overlaps the pause instead of stacking on top of it.
+    function onSpeechSnippet(heard, endedAt) {
+      const text = meaningfulTranscript(heard);
+      if (!text) return;
+      if (!speechParts.length) earcon('think'); // first real word of this turn
+      speechParts.push(text);
+      lastSpeechEndedAt = Math.max(lastSpeechEndedAt, endedAt || performance.now());
+      const delay = Math.max(0, lastSpeechEndedAt + settings.get('vadHangoverMs') - performance.now());
+      clearTimeout(sendTimer);
+      sendTimer = setTimeout(flushSpeech, delay);
+    }
+
+    function flushSpeech() {
+      clearTimeout(sendTimer);
+      // A snippet may still be transcribing and could extend this utterance —
+      // wait for it rather than sending a fragment.
+      if (pendingSnippets > 0) {
+        sendTimer = setTimeout(flushSpeech, 120);
+        return;
+      }
+      sendTimer = null;
+      const combined = speechParts.join(' ').replace(/\s+/g, ' ').trim();
+      speechParts = [];
+      lastSpeechEndedAt = 0;
+      if (combined) onTranscript(combined);
+    }
+
+    function resetSpeech() {
+      clearTimeout(sendTimer);
+      sendTimer = null;
+      speechParts = [];
+      lastSpeechEndedAt = 0;
     }
 
     // --- connection / negotiation (guest = offerer) -------------------------
@@ -564,6 +616,7 @@ export class TetherQuery extends Query {
     }
     async function stopConversation() {
       await mic.stop();
+      resetSpeech();
       tts.cancel();
       wake.disable();
       media.deactivate();

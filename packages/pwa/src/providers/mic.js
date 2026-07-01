@@ -1,12 +1,20 @@
 // Microphone with energy-based voice-activity detection. Continuously reports a
-// level (for the UI meter) and segments speech into utterances: on voice onset
-// it records via MediaRecorder; after `hangover` ms of silence it finalizes the
-// clip and emits it. The encoded blob is shipped over the data channel to the
-// desktop, which runs Whisper — STT never happens on-device.
+// level (for the UI meter) and segments audio into short SNIPPETS: on sound
+// onset it records via MediaRecorder; after a brief energy gap it finalizes the
+// clip and emits it. Each snippet is transcribed on-device (Whisper) and the
+// conversation layer decides which are real speech vs. noise — so segmentation
+// stays cheap and dumb here, and "send on a speech gap" lives where it can see
+// the transcript.
 //
-// Thresholds are read live from settings each frame, so tuning is instant.
+// The energy gate only decides when to CUT a snippet; it deliberately does NOT
+// decide when to send (noise would hold that open). Kept short so speech breaks
+// into snippets Whisper can classify.
 
 import { Provider } from '@3sln/ngin';
+
+// Energy-silence that ends a capture snippet. Short: we want frequent snippets
+// (at phrase boundaries) so the transcript layer can spot real speech gaps.
+const SNIPPET_GAP_MS = 300;
 
 const CANDIDATE_MIMES = [
   'audio/webm;codecs=opus',
@@ -21,10 +29,9 @@ function pickMime() {
 }
 
 export class Microphone extends EventTarget {
-  constructor({ getThreshold, getHangover }) {
+  constructor({ getThreshold }) {
     super();
     this.getThreshold = getThreshold;
-    this.getHangover = getHangover;
     this.running = false;
     this.paused = false;
     this.speaking = false;
@@ -72,7 +79,6 @@ export class Microphone extends EventTarget {
 
     if (!this.paused) {
       const threshold = this.getThreshold();
-      const hangover = this.getHangover();
       const now = performance.now();
       if (rms > threshold) {
         this.lastVoice = now;
@@ -81,8 +87,9 @@ export class Microphone extends EventTarget {
           this.#startRecorder();
           this.emit('speechstart', {});
         }
-      } else if (this.speaking && now - this.lastVoice > hangover) {
+      } else if (this.speaking && now - this.lastVoice > SNIPPET_GAP_MS) {
         this.speaking = false;
+        this.speechEndedAt = this.lastVoice; // when speech actually stopped
         this.#stopRecorder();
       }
     }
@@ -92,6 +99,7 @@ export class Microphone extends EventTarget {
   #startRecorder() {
     this.chunks = [];
     this.discarding = false;
+    this.manual = false; // VAD snippet unless startManual overrides
     try {
       this.recorder = new MediaRecorder(this.stream, this.mime ? { mimeType: this.mime } : undefined);
     } catch {
@@ -107,7 +115,8 @@ export class Microphone extends EventTarget {
         const blob = new Blob(this.chunks, { type: this.mime || 'audio/webm' });
         // Drop sub-250ms blips (door slams, lip smacks).
         if (blob.size > 0 && durationMs > 250) {
-          this.emit('utterance', { blob, mime: blob.type || this.mime || 'audio/webm', durationMs });
+          const endedAt = this.speechEndedAt || performance.now();
+          this.emit('utterance', { blob, mime: blob.type || this.mime || 'audio/webm', durationMs, manual: this.manual, endedAt });
         }
       }
       this.emit('speechend', {});
@@ -125,6 +134,7 @@ export class Microphone extends EventTarget {
     this.paused = true; // suppress VAD segmentation while held
     this.speaking = false;
     this.#startRecorder();
+    this.manual = true; // this clip is a deliberate push-to-talk turn
   }
 
   /** Push-to-talk: stop and emit the recorded utterance. */
@@ -179,7 +189,6 @@ export class MicProvider extends Provider {
       const settings = await this.settings.obtain();
       this.mic = new Microphone({
         getThreshold: () => settings.get('vadThreshold'),
-        getHangover: () => settings.get('vadHangoverMs'),
       });
     }
     return this.mic;
