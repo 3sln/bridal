@@ -55,6 +55,10 @@ const BUILTIN_PROFILES = {
     // Auto-wire bridle's MCP server so the agent can drive the phone front-end.
     mcpConfig: (url) => ({ mcpServers: { bridle: { type: 'http', url } } }),
     mcp: ({ configPath }) => ['--mcp-config', configPath, '--allowedTools', 'mcp__bridle__*'],
+    // Route Claude's permission prompts to bridle's MCP tool → the phone. Paired
+    // with `--mode auto`, the classifier auto-approves safe calls and only the
+    // risky ones surface as an approve/deny card on your phone.
+    permissionPromptTool: (toolName) => ['--permission-prompt-tool', toolName],
     streamStderr: false,
   },
 

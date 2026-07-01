@@ -30,6 +30,8 @@ import {
 } from '@bridle/protocol/link';
 import { answer as mkAnswer } from '@bridle/protocol/signaling';
 import { fingerprintJwk, verifySignature } from '@bridle/protocol/identity';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { McpServer } from '../mcp.js';
 
 export const PHASE = Object.freeze({
@@ -77,6 +79,15 @@ export class SessionQuery extends Query {
 
     let outBuffer = ''; // agent output produced before a channel is open
     let peer = null; // the live HostPeer for the current connection
+    // Incoming form-file uploads: bytes are streamed to a temp file so a big
+    // upload never sits in memory or crosses into the agent's context.
+    const formFiles = new Map(); // formId -> [{ field, name, path, size, mime }]
+    let activeUpload = null;
+    const takeFormFiles = (id) => {
+      const f = formFiles.get(id) || [];
+      formFiles.delete(id);
+      return f;
+    };
     let authed = false; // has the current peer proven its pinned device identity?
     let nonce = null; // per-connection challenge the guest must sign
     let pinnedFingerprint = await registry.getPin(config.room); // TOFU device pin
@@ -154,6 +165,16 @@ export class SessionQuery extends Query {
       });
       on('closed', () => push({ phase: PHASE.PEER_LEFT }));
       on('message', (e) => handleLink(e.detail.msg));
+      on('binary', (e) => onUploadChunk(e.detail.chunk));
+    }
+
+    // Stream an in-flight form-file upload straight to disk (only from a verified
+    // peer, and only between FORM_FILE_BEGIN/END).
+    function onUploadChunk(chunk) {
+      if (!authed || !activeUpload) return;
+      const u8 = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+      activeUpload.writer.write(u8);
+      activeUpload.size += u8.byteLength;
     }
 
     // The guest passed the challenge: open the tether for real.
@@ -247,6 +268,26 @@ export class SessionQuery extends Query {
           break;
         case LINK.ASK_REPLY:
           frontend.resolveAsk(msg.id, msg.answer);
+          break;
+        case LINK.FORM_FILE_BEGIN: {
+          const safe = String(msg.name || 'upload').replace(/[^\w.-]/g, '_').slice(-80) || 'upload';
+          const path = join(tmpdir(), `bridle-upload-${process.pid}-${Date.now()}-${safe}`);
+          activeUpload = { id: msg.id, field: msg.field, name: msg.name || safe, mime: msg.mime, path, size: 0, writer: Bun.file(path).writer() };
+          break;
+        }
+        case LINK.FORM_FILE_END:
+          if (activeUpload && activeUpload.id === msg.id && activeUpload.field === msg.field) {
+            await activeUpload.writer.end();
+            const list = formFiles.get(activeUpload.id) || [];
+            list.push({ field: activeUpload.field, name: activeUpload.name, path: activeUpload.path, size: activeUpload.size, mime: activeUpload.mime });
+            formFiles.set(activeUpload.id, list);
+            activeUpload = null;
+          }
+          break;
+        case LINK.FORM_REPLY:
+          // The phone sends the text fields; any uploaded files were streamed
+          // separately and saved to disk here, so we merge their paths in.
+          frontend.resolveForm(msg.id, msg.values == null ? null : { values: msg.values, files: takeFormFiles(msg.id) });
           break;
         case LINK.PING:
           peer?.send(pong(msg.ts));

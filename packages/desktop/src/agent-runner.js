@@ -47,7 +47,13 @@ export class AgentRunner extends EventTarget {
       }
       this.mcpReady = true;
     }
-    return this.profile.mcp({ url: this.mcpUrl, configPath: this.mcpConfigPath });
+    const args = this.profile.mcp({ url: this.mcpUrl, configPath: this.mcpConfigPath });
+    // Delegate the agent's own permission prompts to the phone, where the profile
+    // supports it (Claude's --permission-prompt-tool → bridle's `permission` tool).
+    if (this.profile.permissionPromptTool) {
+      args.push(...this.profile.permissionPromptTool('mcp__bridle__permission'));
+    }
+    return args;
   }
 
   get isPipe() {

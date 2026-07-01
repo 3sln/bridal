@@ -21,6 +21,8 @@ import {
   NewSessionAction,
   CloseSessionsAction,
   AnswerAskAction,
+  SubmitFormAction,
+  CancelFormAction,
   OpenTethersAction,
   CloseTethersAction,
   OpenDetailsAction,
@@ -42,6 +44,7 @@ import sessionsSheet from '../components/sessionsSheet.js';
 import tethersSheet from '../components/tethersSheet.js';
 import detailsSheet from '../components/detailsSheet.js';
 import shortcutsSheet from '../components/shortcutsSheet.js';
+import formSheet from '../components/formSheet.js';
 import askPrompt from '../components/askPrompt.js';
 
 const { alias, div, p, strong } = dd;
@@ -68,6 +71,8 @@ export default function app(engine) {
     'new-session': () => go(new NewSessionAction()),
     'close-sessions': () => go(new CloseSessionsAction()),
     'answer-ask': (e) => go(new AnswerAskAction(e.detail.answer)),
+    'submit-form': (e) => go(new SubmitFormAction(e.detail)),
+    'cancel-form': (e) => go(new CancelFormAction(e.detail.id)),
     'open-tethers': () => go(new OpenTethersAction()),
     'close-tethers': () => go(new CloseTethersAction()),
     'open-details': () => go(new OpenDetailsAction()),
@@ -112,6 +117,7 @@ function view(state) {
     state.tethersOpen && tethersSheet(state),
     state.detailsOpen && detailsSheet(state),
     state.shortcutsOpen && shortcutsSheet(state),
+    state.form && formSheet(state),
     state.preparingVoice && voicePrep(state),
   );
 }

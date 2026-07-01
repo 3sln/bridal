@@ -14,6 +14,12 @@ test('a custom oneshot profile builds turn args from templates', () => {
   expect(p.turn({ prompt: 'more', first: false, sessionId: 'abc' }).args).toEqual(['-p', '--resume', 'abc', 'more']);
 });
 
+test('claude declares a permission-prompt-tool hook', () => {
+  const claude = resolveAgent({ id: 'claude' });
+  expect(claude.permissionPromptTool('mcp__bridle__permission')).toEqual(['--permission-prompt-tool', 'mcp__bridle__permission']);
+  expect(claude.modes.auto).toEqual(['--permission-mode', 'auto']);
+});
+
 test('a custom pipe profile needs no templates', () => {
   const p = normalizeCustomProfile('raw', { command: ['raw-cli', '--stdin'], mode: 'pipe' });
   expect(p.mode).toBe('pipe');

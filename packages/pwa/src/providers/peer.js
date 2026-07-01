@@ -77,6 +77,14 @@ export class GuestPeer extends EventTarget {
     return false;
   }
 
+  sendBinary(buf) {
+    if (this.channel.readyState === 'open') {
+      this.channel.send(buf);
+      return true;
+    }
+    return false;
+  }
+
   close() {
     try {
       this.channel.close();

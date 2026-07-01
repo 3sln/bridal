@@ -11,6 +11,7 @@ import {
   markdown as mkMarkdown,
   statusLine as mkStatus,
   ask as mkAsk,
+  form as mkForm,
   assetBegin,
   assetEnd,
 } from '@bridle/protocol/link';
@@ -95,28 +96,42 @@ export class FrontendController {
     this.#require();
     const id = `q${++this.seq}`;
     this.peer.send(mkAsk(id, question, choices || null));
+    return this.#awaitReply(id);
+  }
+  resolveAsk(id, answer) {
+    this.#resolve(id, answer);
+  }
+
+  /** Render a form on the phone; resolves with { values, files } once submitted
+   *  (or null if cancelled). Files are already saved to disk by the session (see
+   *  handleLink), so this never carries raw bytes. */
+  showForm(html, { title, submit } = {}) {
+    this.#require();
+    const id = `f${++this.seq}`;
+    this.peer.send(mkForm(id, html, { title, submit }));
+    return this.#awaitReply(id);
+  }
+  resolveForm(id, result) {
+    this.#resolve(id, result);
+  }
+
+  #awaitReply(id) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error('the user did not answer in time'));
       }, ASK_TIMEOUT_MS);
       this.pending.set(id, {
-        resolve: (a) => {
-          clearTimeout(timer);
-          resolve(a);
-        },
-        reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
+        resolve: (a) => { clearTimeout(timer); resolve(a); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
       });
     });
   }
-  resolveAsk(id, answer) {
+  #resolve(id, value) {
     const p = this.pending.get(id);
     if (p) {
       this.pending.delete(id);
-      p.resolve(answer);
+      p.resolve(value);
     }
   }
 }

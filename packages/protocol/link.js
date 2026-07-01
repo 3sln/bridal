@@ -29,6 +29,9 @@ export const LINK = Object.freeze({
   LIST_SESSIONS: 'list-sessions', // { t }          request the agent's sessions
   CONNECT_SESSION: 'connect-session', // { t, id }  attach (id) or start fresh (null)
   ASK_REPLY: 'ask-reply', // { t, id, answer }      response to an ASK prompt
+  FORM_REPLY: 'form-reply', // { t, id, values }     submitted form values (or null = cancelled)
+  FORM_FILE_BEGIN: 'form-file-begin', // { t, id, field, name, mime, size }  upload starts; binary chunks follow
+  FORM_FILE_END: 'form-file-end', // { t, id, field }                        upload done
 
   // host (desktop) -> guest (phone)
   OUTPUT: 'output', // { t, text, stream }   agent stdout/stderr chunk
@@ -41,6 +44,7 @@ export const LINK = Object.freeze({
   MARKDOWN: 'markdown', // { t, title, markdown }  render a card
   STATUSLINE: 'status-line', // { t, text }   set a transient status line
   ASK: 'ask', // { t, id, question, choices }  prompt the user; expects ASK_REPLY
+  FORM: 'form', // { t, id, html, title, submit }  render a form; expects FORM_REPLY
   ASSET_BEGIN: 'asset-begin', // { t, id, kind, name, mime, size, meta }
   ASSET_END: 'asset-end', // { t, id }         binary chunks arrive between begin/end
 });
@@ -109,6 +113,10 @@ export const markdown = (md, title) => ({ t: LINK.MARKDOWN, markdown: md, title 
 export const statusLine = (s) => ({ t: LINK.STATUSLINE, text: s });
 export const ask = (id, question, choices) => ({ t: LINK.ASK, id, question, choices: choices || null });
 export const askReply = (id, answer) => ({ t: LINK.ASK_REPLY, id, answer });
+export const form = (id, html, { title, submit } = {}) => ({ t: LINK.FORM, id, html, title: title || null, submit: submit || null });
+export const formReply = (id, values) => ({ t: LINK.FORM_REPLY, id, values: values || null });
+export const formFileBegin = (id, field, { name, mime, size } = {}) => ({ t: LINK.FORM_FILE_BEGIN, id, field, name: name || 'upload', mime: mime || 'application/octet-stream', size: size || 0 });
+export const formFileEnd = (id, field) => ({ t: LINK.FORM_FILE_END, id, field });
 export const assetBegin = (id, kind, name, mime, size, meta) => ({ t: LINK.ASSET_BEGIN, id, kind, name, mime, size, meta: meta || {} });
 export const assetEnd = (id) => ({ t: LINK.ASSET_END, id });
 
