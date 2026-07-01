@@ -14,7 +14,7 @@
 // and — because a running tether keeps the old binary open (a hard file lock on
 // Windows) — offer to stop the tether so the upgrade can proceed, then restart it.
 
-const REPO = '3sln/bridal';
+const REPO = '3sln/bridle';
 
 export const INSTALL_SH = `#!/bin/sh
 # bridle installer —  curl -fsSL https://bridle.3sln.com/install.sh | sh

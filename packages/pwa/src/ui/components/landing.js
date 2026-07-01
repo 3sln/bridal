@@ -8,7 +8,7 @@ import { dd } from '../../runtime.js';
 
 const { alias, div, p, span, strong, button, a, ul, li, h } = dd;
 
-const REPO = 'https://github.com/3sln/bridal';
+const REPO = 'https://github.com/3sln/bridle';
 const INSTALL = {
   unix: 'curl -fsSL https://bridle.3sln.com/install.sh | sh',
   win: 'irm https://bridle.3sln.com/install.ps1 | iex',
@@ -91,7 +91,7 @@ export default alias(function () {
       h('footer', { className: 'lp-foot' },
         span({}, '🐴 bridle'),
         span({ className: 'lp-dot' }, '·'),
-        a({ href: REPO, target: '_blank', rel: 'noopener' }, 'github.com/3sln/bridal'),
+        a({ href: REPO, target: '_blank', rel: 'noopener' }, 'github.com/3sln/bridle'),
       ),
     ),
   );
