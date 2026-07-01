@@ -28,8 +28,17 @@ export function runSession(engine, config, { ui } = {}) {
       if (state.phase === PHASE.TETHERED && firstTether) {
         firstTether = false;
         if (config.autoDaemon && !config.daemonMode) {
-          await daemonizeHandoff(engine, config, sub, ui);
-          resolve({ reason: 'daemonized' });
+          const ok = await daemonizeHandoff(engine, config, sub, ui);
+          if (ok) {
+            resolve({ reason: 'daemonized' });
+          } else if (ui) {
+            // Install failed (e.g. no permission to register a background service
+            // — common on locked-down corporate machines). Don't claim we handed
+            // off and quit: keep serving in the foreground so the phone stays
+            // tethered for as long as this window is open.
+            ui.note("couldn't install the background service — staying in the foreground.");
+            ui.note('keep this window open to hold the tether (or re-run elevated / with --no-daemon).');
+          }
         }
       }
     });
@@ -47,12 +56,12 @@ export function runSession(engine, config, { ui } = {}) {
   });
 }
 
+// Returns true only if the background service was actually installed. On success
+// we stop watching and let the caller hand off + exit; the daemon it started
+// briefly collides with us for the host slot (freed when this process disposes)
+// and retries onto it — see the 4001 handling in signaling-client.js.
 async function daemonizeHandoff(engine, config, sub, ui) {
   ui?.note('first tether confirmed — installing background service…');
-  // Free the room BEFORE the service starts, so the daemon can claim the host
-  // slot without colliding with us.
-  sub.unsubscribe();
-
   const feed = engine.dispatch(
     new InstallSetupAction({
       name: config.name,
@@ -63,9 +72,16 @@ async function daemonizeHandoff(engine, config, sub, ui) {
     }),
   );
 
-  feed.addEventListener('installed', (e) => ui?.installed(e.detail));
-  await new Promise((res, rej) => {
-    feed.addEventListener('complete', res);
-    feed.addEventListener('error', (e) => rej(e.error));
-  }).catch((err) => ui?.error(`daemon install failed: ${err.message}`));
+  const ok = await new Promise((res) => {
+    feed.addEventListener('installed', (e) => ui?.installed(e.detail));
+    feed.addEventListener('complete', () => res(true));
+    feed.addEventListener('error', (e) => {
+      ui?.error(`daemon install failed: ${e.error?.message || e.error}`);
+      res(false);
+    });
+  });
+  if (ok) {
+    sub.unsubscribe();
+  }
+  return ok;
 }
