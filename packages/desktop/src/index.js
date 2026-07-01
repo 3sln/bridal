@@ -58,8 +58,10 @@ switch (parsed.sub) {
     await cmdDaemon(parsed.get('--setup'));
     break;
   case 'help':
-  default:
     ui.help();
+    break;
+  default:
+    await cmdDefault();
     break;
 }
 
@@ -122,7 +124,7 @@ async function cmdDaemon(name) {
 }
 
 // --- list -------------------------------------------------------------------
-async function cmdList() {
+async function renderTethers() {
   const engine = buildEngine(loadConfig(parsed));
   const handle = engine.query(new SetupsQuery());
   await new Promise((resolve) => {
@@ -133,6 +135,17 @@ async function cmdList() {
     });
   });
   await engine.dispose();
+}
+
+async function cmdList() {
+  await renderTethers();
+  process.exit(0);
+}
+
+// --- default: bare `bridle` — the dashboard (tethers + help) ----------------
+async function cmdDefault() {
+  await renderTethers();
+  ui.help();
   process.exit(0);
 }
 

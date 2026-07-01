@@ -18,10 +18,12 @@ test('`tether <name>` defaults the agent to claude', () => {
   expect(cfg.agent.id).toBe('claude');
 });
 
-test('bare / unknown invocations fall through to help', () => {
-  expect(parseArgs([]).sub).toBe('help');
-  expect(parseArgs(['codex']).sub).toBe('help'); // not a subcommand → help
+test('bare / unknown → dashboard; explicit help → help', () => {
+  expect(parseArgs([]).sub).toBe('default'); // bare `bridle` → tethers + help
+  expect(parseArgs(['codex']).sub).toBe('default'); // unknown → dashboard
+  expect(parseArgs(['help']).sub).toBe('help');
   expect(parseArgs(['--help']).sub).toBe('help');
+  expect(parseArgs(['-h']).sub).toBe('help');
 });
 
 test('`tether <name> -- <cmd...>` tethers an arbitrary CLI', () => {

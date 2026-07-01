@@ -48,9 +48,11 @@ export function parseArgs(argv = process.argv.slice(2)) {
   const agentCmd = dashDash >= 0 && argv.length > dashDash + 1 ? argv.slice(dashDash + 1) : null;
 
   const first = head[0] && !head[0].startsWith('-') ? head[0] : null;
-  // Anything that isn't a known subcommand (including a bare `bridle`) shows help.
-  const sub = first && KNOWN_SUBS.has(first) ? first : 'help';
-  const opts = sub !== 'help' ? head.slice(1) : head;
+  const wantsHelp = argv.some((a) => a === 'help' || a === '--help' || a === '-h');
+  // Bare `bridle` shows the dashboard (tethers + help); an explicit help flag
+  // shows just help; anything unrecognized also falls through to the dashboard.
+  const sub = wantsHelp ? 'help' : first && KNOWN_SUBS.has(first) ? first : 'default';
+  const opts = first && KNOWN_SUBS.has(first) ? head.slice(1) : head;
 
   const get = (name) => {
     const i = opts.indexOf(name);

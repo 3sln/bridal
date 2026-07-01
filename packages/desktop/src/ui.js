@@ -66,13 +66,19 @@ export const ui = {
   },
   setups(list) {
     if (!list.length) {
-      console.log(c.dim('no setups yet — run `bridle` in a project and tether once to create one.'));
+      console.log(c.dim('\n  no tethers yet — create one with:  bridle tether <name> <agent>\n'));
       return;
     }
     console.log(c.bold('\n  tethers\n'));
     for (const s of list) {
-      const dot = s.status === 'active' ? c.green('●') : c.dim('○');
-      console.log(`  ${dot} ${c.bold(s.name.padEnd(16))} ${c.dim(s.status.padEnd(9))} ${c.dim(agentLabel(s.agent))}`);
+      const daemonized = s.service === 'active'; // a persistent service is registered
+      const state = s.running
+        ? c.green(daemonized ? 'running · daemonized' : 'running · background')
+        : daemonized
+          ? c.yellow('stopped · daemonized')
+          : c.dim('stopped');
+      const dot = s.running ? c.green('●') : c.dim('○');
+      console.log(`  ${dot} ${c.bold(s.name.padEnd(16))} ${state}   ${c.dim(agentLabel(s.agent))}`);
       if (s.cwd) {
         console.log(`    ${c.dim(s.cwd)}`);
       }
@@ -92,7 +98,8 @@ ${c.bold('usage')}
   bridle help                            show this help
 
 ${c.bold('agents')}  ${listProfiles().map((p) => p.aliases[0]).join('  ')}
-  ${c.dim('default: claude. use `-- <cmd...>` to tether any other CLI.')}
+  ${c.dim('use `-- <cmd...>` to tether any other CLI, or define your own profiles')}
+  ${c.dim('in ~/.config/bridle/profiles.json (see the README).')}
 
 ${c.bold('options')} ${c.dim('(for `tether`)')}
   --resume          resume the latest session (default: fresh conversation)

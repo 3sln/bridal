@@ -34,7 +34,8 @@ export class RemoveSetupAction extends Action {
   }
 }
 
-/** List setups with their live service status. */
+/** List setups with their live status: whether a daemon is running (the lock),
+ *  and whether a persistent service is registered (daemonized). */
 export class SetupsQuery extends Query {
   static deps = ['registry', 'service'];
   async boot({ registry, service }, { notify }) {
@@ -42,7 +43,8 @@ export class SetupsQuery extends Query {
     const list = await Promise.all(
       Object.values(all).map(async (s) => ({
         ...s,
-        status: await service.serviceStatus(s.name),
+        service: await service.serviceStatus(s.name), // 'active' == a task/unit is registered
+        running: registry.daemonRunning(s.name), // a live daemon holds this tether's lock
         manager: service.platformName(),
       })),
     );

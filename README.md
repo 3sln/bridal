@@ -33,20 +33,22 @@ irm https://bridle.3sln.com/install.ps1 | iex
 Then, in any project:
 
 ```sh
-bridle                  # pair (default agent: claude); scan the QR with your phone
-bridle codex            # or pick another agent
-bridle -- <cmd…>        # or run any other CLI in generic pipe mode
+bridle tether work claude       # create a tether named "work" (any agent profile)
+bridle tether work -- <cmd…>    # …or tether an arbitrary CLI (generic pipe mode)
 ```
 
-Scan the QR (or open the printed URL). The first time you tether, bridle
-**installs itself as a background service** for that project and hands off — it's
-now always available; your phone reconnects automatically.
+Scan the QR (or open the printed URL). On first tether, bridle tries to
+**install itself as a background service** and hands off — always available, your
+phone reconnects automatically. If your machine blocks that (locked-down
+corporate policy), it starts a **background server** for the session instead and
+tells you to run `bridle daemonize work` from a PowerShell/terminal opened as
+administrator to make it permanent.
 
 ```sh
-bridle list                       # your daemonized tethers + status
-bridle remove <name>              # stop + uninstall one
-bridle -- claude --no-daemon      # pair without daemonizing
-bridle --webview -- claude        # also pop a native QR window
+bridle                            # your tethers + status (running/daemonized), and help
+bridle daemonize <name>          # register the persistent service (run as admin if blocked)
+bridle remove <name>             # stop + uninstall one
+bridle tether work claude --webview   # also pop a native QR window
 ```
 
 ## How it works
@@ -75,16 +77,37 @@ bridle --webview -- claude        # also pop a native QR window
 
 Bridle invokes each agent in its **headless** mode (prompt in → text out), not its
 interactive TUI — so there's no PTY or ANSI to read aloud, and replies stream
-cleanly to TTS. Pick one with `bridle <agent>` (default `claude`):
+cleanly to TTS. Pick one with `bridle tether <name> <agent>`:
 
 | Tier | Agents | How |
 | --- | --- | --- |
 | **Enhanced** (tuned + session continuity) | `claude`, `codex`, `antigravity` (`agy`), `gemini`, `opencode`, `aider`, `goose`, `cursor` | each tool's headless flag (`claude -p`, `codex exec`, `agy -p`, …) with explicit session IDs threaded through every turn |
 | **Best-effort** | `q` (Amazon Q), `copilot` | headless flags that may shift between releases |
-| **Baseline** (any CLI) | `bridle -- <cmd…>` | generic persistent pipe: your text → stdin, stdout → phone |
+| **Baseline** (any CLI) | `bridle tether <name> -- <cmd…>` | generic persistent pipe: your text → stdin, stdout → phone |
 
-Adding a tuned agent is a one-line profile in `packages/desktop/src/agents.js`, not
-a code change — the runner and everything downstream are agent-agnostic.
+### Your own profiles
+
+Drop a `profiles.json` in bridle's config dir (`~/.config/bridle/` on Linux/macOS,
+`%APPDATA%\bridle\` on Windows) to add or override agents — no code change. Oneshot
+agents are described with arg templates (`{prompt}` and `{session}` are filled per
+turn); a `"pipe"` profile just needs a command:
+
+```json
+{
+  "mycli": {
+    "label": "My CLI",
+    "aliases": ["mycli", "mc"],
+    "command": ["mycli"],
+    "mode": "oneshot",
+    "promptArgs": ["-p", "{prompt}"],
+    "resumeArgs": ["-p", "--resume", "{session}", "{prompt}"]
+  }
+}
+```
+
+Then `bridle tether work mycli`. A built-in tuned profile lives one-line in
+`packages/desktop/src/agents.js`; the runner and everything downstream are
+agent-agnostic.
 
 ## Sessions
 
@@ -269,7 +292,7 @@ npm run deploy:worker
 bun install
 bun run dev:signaling          # signaling + PWA host on http://localhost:8787
 bun run dev:pwa                # vite dev server (open from your phone on the LAN)
-bridle --local -- claude       # point the desktop at localhost:8787
+bridle tether dev claude --local   # point the desktop at localhost:8787
 ```
 
 Open the PWA with `?backend=http://<your-lan-ip>:8787#room=<code>` when running the

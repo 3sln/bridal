@@ -116,8 +116,8 @@ case ":\$PATH:" in
   *) info "add \$dest to your PATH, e.g.  export PATH=\\"\$dest:\\\$PATH\\"" ;;
 esac
 printf '\\n'
-echo "next:  bridle -- claude        # pair, then it auto-daemonizes"
-echo "       bridle list             # see your tethers"
+echo "next:  bridle tether work claude   # create a tether named 'work', then scan the QR"
+echo "       bridle                      # your tethers + status, and help"
 `;
 
 export const INSTALL_PS1 = `# bridle installer —  irm https://bridle.3sln.com/install.ps1 | iex
@@ -204,8 +204,8 @@ if ($userPath -notlike "*$dest*") {
 Write-Host ""
 Write-Host "OK  bridle $tag installed to $out" -ForegroundColor Green
 Write-Host ""
-Write-Host "next:  bridle -- claude        # pair, then it auto-daemonizes"
-Write-Host "       bridle list             # see your tethers"
+Write-Host "next:  bridle tether work claude   # create a tether named 'work', then scan the QR"
+Write-Host "       bridle                      # your tethers + status, and help"
 `;
 
 export const INSTALL_HELP = `bridle — install
