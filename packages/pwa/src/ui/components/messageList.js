@@ -9,8 +9,9 @@ export default alias((messages) =>
 );
 
 function renderMessage(m) {
-  return li({ className: `msg ${m.role} ${m.kind || ''}` },
+  return li({ className: `msg ${m.role} ${m.kind || ''} ${m.queued ? 'queued' : ''}`.trim() },
     m.kind === 'command' && span({ className: 'tag' }, 'cmd'),
+    m.queued && span({ className: 'tag queued-tag' }, 'queued'),
     body(m),
   ).key(m.id);
 }

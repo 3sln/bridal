@@ -24,6 +24,7 @@ beforeAll(async () => {
   globalThis.document = win.document;
   globalThis.navigator = win.navigator;
   globalThis.location = win.location;
+  globalThis.requestAnimationFrame = win.requestAnimationFrame || ((fn) => fn());
 
   // Import after globals are in place (module top-levels may touch them).
   ({ dd } = await import('../src/runtime.js'));
@@ -71,4 +72,20 @@ test('statusBar shows a status label when there is no tether yet', () => {
   const root = mount(statusBar({ connection: 'connecting' }));
   expect(root.querySelector('.status .dot.connecting')).toBeTruthy();
   expect(root.textContent).toContain('connecting');
+});
+
+test('controlBar shows "Thinking…" while awaiting the agent reply', async () => {
+  const controlBar = (await import('../src/ui/components/controlBar.js')).default;
+  const thinking = mount(controlBar({ conversation: true, awaitingReply: true, listening: true }));
+  expect(thinking.textContent).toContain('Thinking…');
+  // On-device transcription is distinct from the agent thinking.
+  const transcribing = mount(controlBar({ conversation: true, processing: true, listening: true }));
+  expect(transcribing.textContent).toContain('Transcribing…');
+});
+
+test('messageList badges a message held for the next turn', async () => {
+  const messageList = (await import('../src/ui/components/messageList.js')).default;
+  const root = mount(messageList([{ id: 'q1', role: 'user', content: 'and one more thing', queued: true }]));
+  expect(root.querySelector('.msg.queued')).toBeTruthy();
+  expect(root.querySelector('.queued-tag')?.textContent).toContain('queued');
 });

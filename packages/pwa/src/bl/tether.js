@@ -67,6 +67,7 @@ export class TetherQuery extends Query {
       listening: false,
       speaking: false,
       processing: false, // transcribing an utterance on-device
+      awaitingReply: false, // sent input; the agent is working on this turn
       sttState: 'idle', // idle | loading | ready | error
       sttProgress: null, // 0..100 when totals are known; null = indeterminate
       sttBytes: 0, // bytes downloaded so far (always known, monotonic)
@@ -113,15 +114,90 @@ export class TetherQuery extends Query {
     let peer = null;
     let speakBuffer = '';
     let incomingAsset = null; // asset being received (between ASSET_BEGIN/END)
-    let replyPending = false; // we sent input and are awaiting the agent's reply
     let flushTimer = null;
     let lastLevelNotify = 0;
 
+    // --- turn tracking ------------------------------------------------------
+    // A turn = from when we send input until the agent finishes replying. The
+    // desktop marks it precisely with STATUS turn-start/turn-end; for agents that
+    // don't, we fall back to "no output for TURN_IDLE_MS", with a hard cap so a
+    // silent turn can't wedge things. While a turn is in flight, anything the user
+    // says/types is held in `outQueue` (shown as queued) and sent as one combined
+    // message when the turn ends — so a mid-thought pause doesn't interleave.
+    const TURN_IDLE_MS = 2000;
+    const TURN_MAX_MS = 120000;
+    let explicitTurn = false; // desktop is sending turn-start/turn-end this turn
+    let sawOutput = false; // first output chunk of the current turn arrived
+    let idleTimer = null;
+    let safetyTimer = null;
+    const outQueue = []; // [{ text, kind, msg }] held while the agent is busy
+
+    function beginTurn() {
+      explicitTurn = false;
+      sawOutput = false;
+      clearTimeout(safetyTimer);
+      safetyTimer = setTimeout(endTurn, TURN_MAX_MS);
+      push({ awaitingReply: true });
+    }
+    function armIdle() {
+      if (explicitTurn) return; // the desktop will tell us when the turn ends
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(endTurn, TURN_IDLE_MS);
+    }
+    function endTurn() {
+      clearTimeout(idleTimer);
+      clearTimeout(safetyTimer);
+      idleTimer = safetyTimer = null;
+      explicitTurn = false;
+      markAssistantDone();
+      flushSpeak();
+      // Anything held during the turn goes out now as one combined message; its
+      // bubbles were already shown (queued) and just lose the badge.
+      const combined = flushQueue();
+      if (combined) {
+        sendNow(combined);
+      } else {
+        push({ awaitingReply: false });
+      }
+    }
+    function resetTurn() {
+      clearTimeout(idleTimer);
+      clearTimeout(safetyTimer);
+      idleTimer = safetyTimer = null;
+      explicitTurn = false;
+      outQueue.length = 0;
+      push({ awaitingReply: false });
+    }
+
+    function sendNow(text) {
+      peer?.send(mkText(text));
+      beginTurn();
+    }
+    // Send now if idle; otherwise hold for the next turn and mark it queued.
+    function queueOrSend(text, kind) {
+      if (state.awaitingReply) {
+        const msg = addMessage('user', text, kind, { queued: true });
+        outQueue.push({ text, kind, msg });
+      } else {
+        addMessage('user', text, kind);
+        sendNow(text);
+      }
+    }
+    function flushQueue() {
+      if (!outQueue.length) return '';
+      const combined = outQueue.map((q) => q.text).join('\n');
+      outQueue.forEach((q) => { if (q.msg) q.msg.queued = false; });
+      outQueue.length = 0;
+      return combined;
+    }
+
     // --- messages -----------------------------------------------------------
     const addMessage = (role, content, kind, extra) => {
-      if (role === 'user') markAssistantDone();
-      state.messages.push({ id: `${nonce}-${state.messages.length}`, role, content, kind, ts: Date.now(), ...extra });
+      if (role === 'user' && !extra?.queued) markAssistantDone();
+      const msg = { id: `${nonce}-${state.messages.length}`, role, content, kind, ts: Date.now(), ...extra };
+      state.messages.push(msg);
       notifyNow();
+      return msg;
     };
     const appendAssistant = (chunk) => {
       const last = state.messages[state.messages.length - 1];
@@ -214,6 +290,7 @@ export class TetherQuery extends Query {
 
     // --- connection / negotiation (guest = offerer) -------------------------
     function teardownPeer() {
+      resetTurn();
       if (peer) {
         try {
           peer.close();
@@ -329,18 +406,24 @@ export class TetherQuery extends Query {
           break;
         }
         case LINK.OUTPUT:
-          if (replyPending) {
-            earcon('done');
-            replyPending = false;
+          if (!sawOutput) {
+            sawOutput = true;
+            earcon('done'); // the agent has started replying
           }
+          armIdle(); // (no-op once the desktop is driving turn-start/turn-end)
           appendAssistant(msg.text);
           speakChunk(msg.text);
           break;
         case LINK.STATUS:
-          if (msg.state === 'exited') {
-            markAssistantDone();
-            flushSpeak();
+          if (msg.state === 'turn-start') {
+            if (!state.awaitingReply) beginTurn();
+            explicitTurn = true; // authoritative turn — disarm the idle heuristic
+            clearTimeout(idleTimer);
+          } else if (msg.state === 'turn-end') {
+            endTurn();
+          } else if (msg.state === 'exited') {
             addMessage('system', `agent exited (${msg.code ?? '?'})`, 'status');
+            endTurn();
           }
           break;
         case LINK.SESSIONS:
@@ -453,9 +536,7 @@ export class TetherQuery extends Query {
         // A question is pending — this speech is the answer.
         answerAsk(resolveChoice(text, state.ask.choices));
       } else {
-        addMessage('user', text);
-        peer?.send(mkText(text));
-        replyPending = true;
+        queueOrSend(text);
       }
     }
 
@@ -609,8 +690,7 @@ export class TetherQuery extends Query {
               addMessage('user', it.text, 'answer');
               push({ ask: null });
             } else {
-              addMessage('user', it.text);
-              peer?.send(mkText(it.text));
+              queueOrSend(it.text);
             }
           }
           break;

@@ -5,9 +5,9 @@ import { dd } from '../../runtime.js';
 const { alias, div } = dd;
 
 export default alias((props) => {
-  const { level = 0, listening, speaking, processing } = props;
+  const { level = 0, listening, speaking, processing, awaitingReply } = props;
   const pct = Math.min(100, Math.round(level * 600));
-  const cls = ['meter', listening && 'listening', speaking && 'speaking', processing && 'processing']
+  const cls = ['meter', listening && 'listening', speaking && 'speaking', (processing || awaitingReply) && 'processing']
     .filter(Boolean)
     .join(' ');
   return div({ className: cls },

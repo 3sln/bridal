@@ -87,8 +87,15 @@ export default alias(function (state) {
 });
 
 function conversationBar(state, fire) {
-  const status = state.speaking ? 'Speaking…' : state.processing ? 'Thinking…' : state.listening ? 'Listening…' : 'Paused';
-  const phase = state.speaking ? 'speaking' : state.processing ? 'thinking' : state.listening ? 'listening' : 'paused';
+  const status = state.speaking ? 'Speaking…'
+    : state.awaitingReply ? 'Thinking…'
+    : state.processing ? 'Transcribing…'
+    : state.listening ? 'Listening…'
+    : 'Paused';
+  const phase = state.speaking ? 'speaking'
+    : state.awaitingReply || state.processing ? 'thinking'
+    : state.listening ? 'listening'
+    : 'paused';
 
   const ctl = (glyph, label, evt, extra = '') =>
     button({ className: `icon-btn round ${extra}`.trim(), title: label, 'aria-label': label }, icon(glyph)).on({ click: () => fire(evt) });

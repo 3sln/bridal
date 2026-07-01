@@ -129,6 +129,10 @@ body {
 .msg.system.error .bubble { color: var(--red); border-color: rgba(251, 113, 133, .3); }
 .msg.command .bubble { background: var(--accent-dim); color: #fff; }
 .msg .tag { align-self: flex-end; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); margin: 0 6px 4px 0; }
+/* Held for the next turn while the agent is still replying. */
+.msg.queued { opacity: .6; }
+.msg.queued .bubble { background: var(--grad); filter: saturate(.6) brightness(.85); box-shadow: none; }
+.msg .queued-tag { color: var(--amber); }
 
 /* ---- mic meter --------------------------------------------------------- */
 .meter { height: 3px; background: transparent; margin: 0 16px; border-radius: 2px; overflow: hidden; opacity: 0; transition: opacity .25s; }

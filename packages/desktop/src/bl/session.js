@@ -113,6 +113,13 @@ export class SessionQuery extends Query {
       push({ agentState: 'exited' });
       peer?.send(status('exited', e.detail.code));
     });
+    // Turn boundaries let the phone show a "thinking" indicator for the whole turn
+    // and hold anything typed/said mid-turn until the agent is ready for it. Only
+    // oneshot agents emit these; pipe agents fall back to the phone's idle timer.
+    onBase(agent, 'status', (e) => {
+      if (e.detail?.state === 'turn-start') peer?.send(status('turn-start'));
+    });
+    onBase(agent, 'turn-end', (e) => peer?.send(status('turn-end', e.detail?.code)));
     // Active session changed (created/attached) -> tell the phone.
     onBase(agent, 'session', (e) => {
       currentSessionId = e.detail.id;

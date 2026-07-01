@@ -10,7 +10,7 @@ export const DEFAULTS = Object.freeze({
   ttsRate: 1.0,
   ttsVoice: '', // '' = browser default
   conversationOnConnect: false, // start in conversation mode automatically
-  vadHangoverMs: 500, // trailing pause (redemption) that ends a Silero segment and sends it
+  vadHangoverMs: 800, // trailing pause (redemption) that ends a Silero segment and sends it
   commandLeadIn: 'bridle', // optional wake word to force command interpretation
   language: '', // Whisper language hint ('' = auto; ignored by *.en models)
   sttModel: 'Xenova/whisper-tiny.en', // offline Whisper model run in-browser
@@ -21,16 +21,16 @@ export const DEFAULTS = Object.freeze({
   mediaControls: true, // headset/car/lock-screen buttons (holds audio focus)
 });
 
-const LEGACY_HANGOVER_MS = 900; // old default that felt like "wait until I'm finished"
+const LEGACY_HANGOVER_MS = [900, 500]; // prior defaults nobody deliberately chose
 
 class Settings extends EventTarget {
   constructor() {
     super();
     const stored = read();
     this.values = { ...DEFAULTS, ...stored };
-    // One-time migration: adopt the snappier send gap for anyone still sitting on
-    // the old default (they never deliberately chose 900ms).
-    if (stored.vadHangoverMs === LEGACY_HANGOVER_MS) {
+    // One-time migration: move anyone still on a prior default onto the current
+    // one (500ms cut people off mid-thought; 900ms felt like "wait for me").
+    if (LEGACY_HANGOVER_MS.includes(stored.vadHangoverMs)) {
       this.values.vadHangoverMs = DEFAULTS.vadHangoverMs;
       write(this.values);
     }
