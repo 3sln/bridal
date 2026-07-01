@@ -47,7 +47,13 @@ export class AgentRunner extends EventTarget {
       }
       this.mcpReady = true;
     }
-    return this.profile.mcp({ url: this.mcpUrl, configPath: this.mcpConfigPath });
+    const args = this.profile.mcp({ url: this.mcpUrl, configPath: this.mcpConfigPath });
+    // Delegate the agent's own permission prompts to the phone, where the profile
+    // supports it (Claude's --permission-prompt-tool → bridle's `permission` tool).
+    if (this.profile.permissionPromptTool) {
+      args.push(...this.profile.permissionPromptTool('mcp__bridle__permission'));
+    }
+    return args;
   }
 
   get isPipe() {
@@ -165,7 +171,7 @@ export class AgentRunner extends EventTarget {
 
   #spawnPersistent() {
     if (this.running) return;
-    this.proc = Bun.spawn(this.profile.command, {
+    this.proc = Bun.spawn([...this.profile.command, ...(this.profile.modeArgs || [])], {
       cwd: this.cwd,
       env: this.env,
       stdin: 'pipe',
@@ -193,7 +199,7 @@ export class AgentRunner extends EventTarget {
     const mcpArgs = await this.#mcpArgs();
     let proc;
     try {
-      proc = Bun.spawn([...this.profile.command, ...mcpArgs, ...args], {
+      proc = Bun.spawn([...this.profile.command, ...(this.profile.modeArgs || []), ...mcpArgs, ...args], {
         cwd: this.cwd,
         env: this.env,
         stdin: stdinFromNull ? 'ignore' : 'pipe',

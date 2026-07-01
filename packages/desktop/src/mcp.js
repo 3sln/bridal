@@ -8,6 +8,10 @@
 // tools/call, ping) and answer with application/json — no SSE required for
 // request/response tools. Bound to 127.0.0.1 only.
 
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 const PROTOCOL_VERSION = '2025-06-18';
 
 export class McpServer {
@@ -78,8 +82,10 @@ export class McpServer {
           serverInfo: { name: 'bridle', version: '0.0.1' },
           instructions:
             'Tools to drive the connected phone: notify, speak, play_audio, show_image, ' +
-            'show_file, show_markdown, set_status, ask. Use them to surface results the user ' +
-            'is better off hearing or seeing than having read aloud.',
+            'show_file, show_markdown, set_status, ask, show_form. Use them to surface results the ' +
+            'user is better off hearing or seeing than having read aloud. Use `ask` for a quick ' +
+            'question and `show_form` for surveys, structured input, or file uploads (its full ' +
+            'response — including files — is saved to disk and only summarized back to you).',
         });
       case 'ping':
         return rpcOk(id, {});
@@ -166,5 +172,81 @@ function buildTools(c) {
       },
       handler: (a) => c.ask(a.question, a.choices),
     },
+    {
+      name: 'show_form',
+      description:
+        'Render a form on the phone for surveys, structured input, or file uploads. `html` is the form body ' +
+        '(labels + input/textarea/select/checkbox/radio/file; sanitized + themed on the phone). Returns a compact ' +
+        'summary; the FULL response — including any uploaded files — is saved to a file path you can read on demand, ' +
+        'so large values never bloat this reply. Give inputs a `name`.',
+      inputSchema: {
+        type: 'object',
+        properties: { html: str('form body HTML'), title: str('optional heading'), submit: str('submit button label') },
+        required: ['html'],
+      },
+      handler: async (a) => summarizeFormResult(await c.showForm(a.html, { title: a.title, submit: a.submit })),
+    },
+    {
+      // Claude calls this (via --permission-prompt-tool) for tool calls its
+      // permission mode won't auto-approve. We surface an approve/deny card on the
+      // phone and return the SDK's expected {behavior} shape.
+      name: 'permission',
+      description: 'Approve or deny a tool call (Claude permission prompt). Do not call directly.',
+      inputSchema: {
+        type: 'object',
+        properties: { tool_name: str('tool being requested'), input: { type: 'object', description: 'tool input' } },
+        required: ['tool_name'],
+      },
+      handler: async (a) => {
+        let answer;
+        try {
+          answer = await c.ask(`Allow ${a.tool_name}?\n${summarizeToolCall(a.tool_name, a.input)}`, ['Allow', 'Deny']);
+        } catch {
+          return JSON.stringify({ behavior: 'deny', message: 'No answer from the phone; denying to be safe.' });
+        }
+        const allow = /^(allow|yes|ok|okay|approve|sure|go ahead)\b/i.test(String(answer).trim());
+        return JSON.stringify(
+          allow
+            ? { behavior: 'allow', updatedInput: a.input || {} }
+            : { behavior: 'deny', message: 'The user denied this action from their phone.' },
+        );
+      },
+    },
   ];
+}
+
+// Save the full form response to disk and hand the agent only a compact summary
+// + the file path, so large values (and uploaded files) never enter its context.
+let formSeq = 0;
+function summarizeFormResult(result) {
+  if (!result || (result.values == null && !(result.files && result.files.length))) {
+    return 'The user cancelled the form.';
+  }
+  const path = join(tmpdir(), `bridle-form-${process.pid}-${++formSeq}.json`);
+  try {
+    writeFileSync(path, JSON.stringify(result, null, 2));
+  } catch {
+    /* fall back to inline (best effort) */
+  }
+  const lines = [`Form submitted. Full response saved to: ${path}`, '  (read that file for full values; large fields are truncated below)'];
+  const values = result.values || {};
+  const fieldLines = Object.entries(values).map(([k, v]) => {
+    const s = typeof v === 'string' ? v : JSON.stringify(v);
+    return `  - ${k}: ${s.length > 120 ? s.slice(0, 119) + '…' : s}`;
+  });
+  if (fieldLines.length) lines.push('fields:', ...fieldLines);
+  for (const f of result.files || []) {
+    lines.push(`  - ${f.field}: file "${f.name}" (${fmtBytes(f.size)}) saved to ${f.path}`);
+  }
+  return lines.join('\n');
+}
+const fmtBytes = (n) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n > 1e3 ? `${(n / 1e3).toFixed(1)} KB` : `${n} B`);
+
+// A short, human-readable summary of a tool call for the permission card.
+function summarizeToolCall(tool, input) {
+  if (!input || typeof input !== 'object') return '';
+  const pick = input.command || input.cmd || input.file_path || input.path || input.url || input.pattern;
+  if (pick) return String(pick).slice(0, 300);
+  const s = JSON.stringify(input);
+  return s.length > 300 ? s.slice(0, 299) + '…' : s;
 }

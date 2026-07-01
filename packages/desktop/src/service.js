@@ -13,7 +13,7 @@
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { safeName, envFileFor } from './registry.js';
+import { safeName, envFileFor, daemonRunning } from './registry.js';
 
 const LABEL = (name) => `com.3sln.bridle.${safeName(name)}`;
 const UNIT = (name) => `bridle-${safeName(name)}.service`;
@@ -56,6 +56,32 @@ export async function serviceStatus(name) {
   } catch {
     return 'unknown';
   }
+}
+
+/**
+ * Fallback when a persistent service can't be installed: launch a *detached*
+ * background daemon for this tether, unless one is already running. It survives
+ * this process exiting but is transient — it won't come back after logout/reboot
+ * (that's what the real service is for). One per tether, guarded by the lock.
+ */
+export async function startBackgroundDaemon(name) {
+  if (daemonRunning(safeName(name))) return { already: true };
+  const { exec, prefix } = selfCommand();
+  const args = [...prefix, 'daemon', '--setup', safeName(name)];
+  if (process.platform === 'win32') {
+    // Start-Process fully detaches the child from us (Bun children can be tied to
+    // our lifetime otherwise).
+    const psArgs = args.map((a) => `'${a.replace(/'/g, "''")}'`).join(',');
+    await run('powershell', [
+      '-NoProfile',
+      '-Command',
+      `Start-Process -FilePath '${exec.replace(/'/g, "''")}' -ArgumentList ${psArgs} -WindowStyle Hidden`,
+    ]);
+  } else {
+    const child = Bun.spawn([exec, ...args], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
+    child.unref?.();
+  }
+  return { already: false };
 }
 
 function pick() {
@@ -159,18 +185,27 @@ WantedBy=default.target
 };
 
 // --- Task Scheduler (Windows) -----------------------------------------------
+// Registering a per-user task can be denied on locked-down machines (AppLocker /
+// EPM / GPO). We don't try to auto-elevate (privilege tools distrust a scripted
+// elevation); instead the caller falls back to a transient background server and
+// tells the user to run `bridle daemonize` from a console they opened as admin —
+// where this same install runs elevated and succeeds. The task itself always
+// runs with a LIMITED token, so the agent never runs as admin.
 const taskScheduler = {
   async install(name) {
+    const task = TASK(name);
     const { exec, prefix } = selfCommand();
-    const tr = [exec, ...prefix, 'daemon', '--setup', safeName(name)].map(winQuote).join(' ');
-    const { code, err } = await run('schtasks', [
-      '/Create', '/TN', TASK(name), '/TR', tr, '/SC', 'ONLOGON', '/RL', 'LIMITED', '/F',
+    const tr = winCmdLine([exec, ...prefix, 'daemon', '--setup', safeName(name)]);
+    const created = await run('schtasks', [
+      '/Create', '/TN', task, '/TR', tr, '/SC', 'ONLOGON', '/RL', 'LIMITED', '/F',
     ]);
-    if (code !== 0) throw new Error(`schtasks create failed: ${err}`);
+    if (created.code !== 0) {
+      throw new Error(created.err.trim() || 'schtasks create failed (access denied)');
+    }
     // ONLOGON only registers it for future logins — start it now too, or the
     // tether stays dark (phone stuck "waiting for desktop") until the next logon.
-    await run('schtasks', ['/Run', '/TN', TASK(name)]).catch(() => {});
-    return { manager: 'task-scheduler', path: TASK(name) };
+    await run('schtasks', ['/Run', '/TN', task]).catch(() => {});
+    return { manager: 'task-scheduler', path: task };
   },
   async uninstall(name) {
     await run('schtasks', ['/Delete', '/TN', TASK(name), '/F']).catch(() => {});
@@ -185,4 +220,5 @@ const taskScheduler = {
 
 const xml = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 const shellQuote = (s) => (/[^\w@%+=:,./-]/.test(s) ? `'${s.replace(/'/g, `'\\''`)}'` : s);
-const winQuote = (s) => (/\s/.test(s) ? `\\"${s}\\"` : s);
+// A Windows command line from tokens: quote any token containing spaces.
+const winCmdLine = (tokens) => tokens.map((t) => (/\s/.test(t) ? `"${t}"` : t)).join(' ');

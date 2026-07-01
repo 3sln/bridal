@@ -19,6 +19,7 @@
 import { readdirSync, statSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { configDir } from './registry.js';
 
 // Injected as the first turn whenever a voice client connects, so the agent
 // adapts its style to being heard rather than read.
@@ -30,7 +31,7 @@ export const VOICE_PRIMER =
   'short sentence, then continue.';
 
 /** @type {Record<string, any>} */
-const PROFILES = {
+const BUILTIN_PROFILES = {
   claude: {
     id: 'claude',
     label: 'Claude Code',
@@ -38,6 +39,13 @@ const PROFILES = {
     command: ['claude'],
     mode: 'oneshot',
     tier: 'enhanced',
+    // Selectable run modes (extra flags): `bridle tether <name> claude --mode auto`.
+    modes: {
+      auto: ['--permission-mode', 'auto'], // classifier decides what's safe vs. too risky
+      edits: ['--permission-mode', 'acceptEdits'], // auto-accept edits, still gated on risky ops
+      yolo: ['--dangerously-skip-permissions'], // no prompts at all — use with care
+      plan: ['--permission-mode', 'plan'], // plan-only, makes no changes
+    },
     setsSessionId: true, // we choose the UUID
     turn: ({ prompt, first, sessionId }) => ({
       args: ['-p', ...(first ? ['--session-id', sessionId] : ['--resume', sessionId]), prompt],
@@ -47,6 +55,10 @@ const PROFILES = {
     // Auto-wire bridle's MCP server so the agent can drive the phone front-end.
     mcpConfig: (url) => ({ mcpServers: { bridle: { type: 'http', url } } }),
     mcp: ({ configPath }) => ['--mcp-config', configPath, '--allowedTools', 'mcp__bridle__*'],
+    // Route Claude's permission prompts to bridle's MCP tool → the phone. Paired
+    // with `--mode auto`, the classifier auto-approves safe calls and only the
+    // risky ones surface as an approve/deny card on your phone.
+    permissionPromptTool: (toolName) => ['--permission-prompt-tool', toolName],
     streamStderr: false,
   },
 
@@ -175,6 +187,74 @@ const PROFILES = {
     streamStderr: false,
   },
 };
+
+// ---- custom profiles -------------------------------------------------------
+// Users can add or override agents from `<config>/profiles.json` (on Linux/mac:
+// ~/.config/bridle/profiles.json). Because `turn` is a function we can't store
+// in JSON, oneshot agents are described declaratively with arg templates:
+//
+//   {
+//     "mycli": {
+//       "label": "My CLI",
+//       "aliases": ["mycli", "mc"],
+//       "command": ["mycli"],
+//       "mode": "oneshot",                                 // or "pipe" (stdin)
+//       "promptArgs": ["-p", "{prompt}"],                  // first turn
+//       "resumeArgs": ["-p", "--resume", "{session}", "{prompt}"],  // optional
+//       "stdinFromNull": true
+//     }
+//   }
+//
+// `{prompt}` and `{session}` are substituted per turn. A "pipe" profile needs no
+// templates. Custom ids override built-ins of the same key.
+export function normalizeCustomProfile(id, def) {
+  const mode = def.mode === 'pipe' ? 'pipe' : 'oneshot';
+  const profile = {
+    id,
+    label: def.label || id,
+    aliases: Array.isArray(def.aliases) && def.aliases.length ? def.aliases : [id],
+    command: Array.isArray(def.command) && def.command.length ? def.command : [id],
+    mode,
+    tier: def.tier || 'custom',
+    setsSessionId: false,
+    streamStderr: def.streamStderr ?? mode === 'pipe',
+    listSessions: () => [],
+  };
+  if (def.modes && typeof def.modes === 'object') {
+    profile.modes = def.modes; // { name: [extra, args] }
+  }
+  if (mode === 'oneshot') {
+    const promptArgs = Array.isArray(def.promptArgs) ? def.promptArgs : ['{prompt}'];
+    const resumeArgs = Array.isArray(def.resumeArgs) ? def.resumeArgs : promptArgs;
+    const fill = (tmpl, prompt, sessionId) =>
+      tmpl.map((a) => String(a).replaceAll('{prompt}', prompt).replaceAll('{session}', sessionId || ''));
+    profile.turn = ({ prompt, first, sessionId }) => ({
+      args: fill(first ? promptArgs : resumeArgs, prompt, sessionId),
+      stdinFromNull: def.stdinFromNull !== false,
+    });
+  }
+  return profile;
+}
+
+function loadCustomProfiles() {
+  let path;
+  try {
+    path = join(configDir(), 'profiles.json');
+    if (!existsSync(path)) return {};
+    const obj = JSON.parse(readFileSync(path, 'utf8'));
+    const out = {};
+    for (const [id, def] of Object.entries(obj || {})) {
+      if (def && typeof def === 'object') out[id] = normalizeCustomProfile(id, def);
+    }
+    return out;
+  } catch (err) {
+    process.stderr.write(`\x1b[33m[bridle] ignoring ${path || 'profiles.json'} — ${err.message}\x1b[0m\n`);
+    return {};
+  }
+}
+
+/** @type {Record<string, any>} */
+const PROFILES = { ...BUILTIN_PROFILES, ...loadCustomProfiles() };
 
 const BY_ALIAS = (() => {
   const map = new Map();

@@ -5,6 +5,7 @@
 
 import { SessionQuery, PHASE } from './bl/session.js';
 import { InstallSetupAction } from './bl/setups.js';
+import { startBackgroundDaemon } from './service.js';
 
 export function runSession(engine, config, { ui } = {}) {
   return new Promise((resolve) => {
@@ -31,13 +32,14 @@ export function runSession(engine, config, { ui } = {}) {
           const ok = await daemonizeHandoff(engine, config, sub, ui);
           if (ok) {
             resolve({ reason: 'daemonized' });
-          } else if (ui) {
-            // Install failed (e.g. no permission to register a background service
-            // — common on locked-down corporate machines). Don't claim we handed
-            // off and quit: keep serving in the foreground so the phone stays
-            // tethered for as long as this window is open.
-            ui.note("couldn't install the background service — staying in the foreground.");
-            ui.note('keep this window open to hold the tether (or re-run elevated / with --no-daemon).');
+          } else {
+            // The service couldn't be registered (and elevation was declined or
+            // blocked). Don't hold the terminal open per tether — start ONE
+            // detached background daemon for this tether instead, then exit. It's
+            // transient (won't survive logout/reboot) but keeps the phone tethered.
+            sub.unsubscribe();
+            const { already } = await startBackgroundDaemon(config.name).catch(() => ({ already: false, failed: true }));
+            resolve({ reason: 'fallback-daemon', already });
           }
         }
       }
@@ -66,7 +68,7 @@ async function daemonizeHandoff(engine, config, sub, ui) {
     new InstallSetupAction({
       name: config.name,
       room: config.room,
-      agent: { id: config.agent.id, command: config.agent.command },
+      agent: { id: config.agent.id, command: config.agent.command, mode: config.agent.modeName || null },
       cwd: config.agent.cwd,
       backendUrl: config.backendUrl,
     }),
@@ -75,10 +77,9 @@ async function daemonizeHandoff(engine, config, sub, ui) {
   const ok = await new Promise((res) => {
     feed.addEventListener('installed', (e) => ui?.installed(e.detail));
     feed.addEventListener('complete', () => res(true));
-    feed.addEventListener('error', (e) => {
-      ui?.error(`daemon install failed: ${e.error?.message || e.error}`);
-      res(false);
-    });
+    // Failure is expected on locked-down machines; the caller reports it and
+    // falls back to a background server, so keep this quiet.
+    feed.addEventListener('error', () => res(false));
   });
   if (ok) {
     sub.unsubscribe();

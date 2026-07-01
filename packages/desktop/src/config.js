@@ -3,12 +3,12 @@
 // object that becomes a singleton ngin provider.
 //
 // Usage:
-//   bridle [agent] [options] [-- <raw cmd...>]   pair + run (auto-daemonizes)
-//   bridle tether <name> [agent] [options]       pair, naming the tether explicitly
-//   bridle list                                  list daemonized setups
-//   bridle remove <name>                         stop + remove a setup
-//   bridle install [agent] [options]             install a setup without pairing
+//   bridle tether <name> [agent] [-- <cmd...>]   create a tether + pair your phone
+//   bridle daemonize [name]                      keep it running (run in an admin console)
+//   bridle list                                  list your tethers
+//   bridle remove <name>                         stop + remove a tether
 //   bridle daemon --setup <name>                 headless run (used by the service)
+//   bridle help                                  show help
 //
 // Tethers are not deduplicated: multiple can coexist on one machine, each tied to
 // the directory it was created in. Re-pairing the same directory updates it in
@@ -37,10 +37,10 @@
 import { basename } from 'node:path';
 import { makeToken } from '@bridle/protocol/signaling';
 import { DEFAULT_ICE_SERVERS, STUN_SERVERS } from '@bridle/protocol/ice';
-import { resolveAgent, DEFAULT_AGENT } from './agents.js';
+import { resolveAgent } from './agents.js';
 
 const DEFAULT_BACKEND = 'https://bridle.3sln.com';
-export const KNOWN_SUBS = new Set(['pair', 'tether', 'install', 'list', 'remove', 'rm', 'daemon', 'help']);
+export const KNOWN_SUBS = new Set(['tether', 'daemonize', 'list', 'remove', 'rm', 'daemon', 'help']);
 
 export function parseArgs(argv = process.argv.slice(2)) {
   const dashDash = argv.indexOf('--');
@@ -48,8 +48,11 @@ export function parseArgs(argv = process.argv.slice(2)) {
   const agentCmd = dashDash >= 0 && argv.length > dashDash + 1 ? argv.slice(dashDash + 1) : null;
 
   const first = head[0] && !head[0].startsWith('-') ? head[0] : null;
-  const sub = first && KNOWN_SUBS.has(first) ? first : 'pair';
-  const opts = first ? head.slice(1) : head;
+  const wantsHelp = argv.some((a) => a === 'help' || a === '--help' || a === '-h');
+  // Bare `bridle` shows the dashboard (tethers + help); an explicit help flag
+  // shows just help; anything unrecognized also falls through to the dashboard.
+  const sub = wantsHelp ? 'help' : first && KNOWN_SUBS.has(first) ? first : 'default';
+  const opts = first && KNOWN_SUBS.has(first) ? head.slice(1) : head;
 
   const get = (name) => {
     const i = opts.indexOf(name);
@@ -58,11 +61,10 @@ export function parseArgs(argv = process.argv.slice(2)) {
   const has = (name) => opts.includes(name);
   const positional = opts.filter((a) => !a.startsWith('-'));
 
-  // `bridle tether <name> [agent]` names the tether explicitly; positional[0] is
-  // the name, positional[1] (if any) the agent. Otherwise a leading non-flag
-  // token that isn't a subcommand is the agent name (`bridle codex`).
-  const tetherName = sub === 'tether' ? positional[0] || null : null;
-  const agentName = sub === 'tether' ? positional[1] || null : first && !KNOWN_SUBS.has(first) ? first : null;
+  // `bridle tether <name> [agent]`: positional[0] is the name, positional[1] the
+  // agent profile; `-- <cmd...>` runs an arbitrary CLI in generic pipe mode.
+  const tetherName = positional[0] || null;
+  const agentName = sub === 'tether' ? positional[1] || null : null;
 
   return { sub, tetherName, agentName, get, has, positional, agentCmd };
 }
@@ -70,7 +72,10 @@ export function parseArgs(argv = process.argv.slice(2)) {
 export function loadConfig(parsed = parseArgs(), env = process.env) {
   const { get, has, agentCmd, agentName, tetherName } = parsed;
 
-  const profile = resolveAgent(agentCmd ? { command: agentCmd } : { id: get('--agent') || agentName || DEFAULT_AGENT });
+  // No default agent: an agent is chosen explicitly (a profile id or `-- <cmd>`).
+  // cmdPair validates that one was given, so we never privilege a particular one.
+  const requested = get('--agent') || agentName;
+  const profile = agentCmd ? resolveAgent({ command: agentCmd }) : requested ? resolveAgent({ id: requested }) : null;
 
   let backend = get('--backend') || env.BRIDLE_BACKEND_URL || DEFAULT_BACKEND;
   if (has('--local')) backend = 'http://localhost:8787';
@@ -79,13 +84,14 @@ export function loadConfig(parsed = parseArgs(), env = process.env) {
   const room = get('--room') || env.BRIDLE_ROOM || makeToken();
   const turn = !has('--no-turn');
   const name = get('--name') || tetherName || basename(process.cwd()) || 'default';
+  const modeName = get('--mode') || null;
 
   return {
     name,
     room,
     backendUrl: backend,
     pwaUrl: `${backend}/#room=${room}`,
-    agent: { ...profile, cwd: process.cwd() },
+    agent: profile ? { ...profile, cwd: process.cwd(), modeName, modeArgs: profile.modes?.[modeName] || [] } : null,
     session: {
       id: get('--session') || null,
       // Default to a fresh conversation. Resuming the latest session silently
@@ -112,7 +118,7 @@ export function configFromSetup(setup, env = process.env) {
     room: setup.room,
     backendUrl: backend,
     pwaUrl: `${backend}/#room=${setup.room}`,
-    agent: { ...profile, cwd: setup.cwd || process.cwd() },
+    agent: { ...profile, cwd: setup.cwd || process.cwd(), modeName: a.mode || null, modeArgs: profile.modes?.[a.mode] || [] },
     session: { id: null, fresh: true, attachLatest: false },
     iceServers: DEFAULT_ICE_SERVERS,
     mcp: { enabled: true, port: 0 },

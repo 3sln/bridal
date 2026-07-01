@@ -15,7 +15,8 @@
     "@3sln/dodo": "^0.0.9",
     "@3sln/bones": "^0.0.5",
     "@huggingface/transformers": "^3.0.0",
-    "@bridle/protocol": "workspace:*"
+    "@bridle/protocol": "workspace:*",
+    "dompurify": "^3.2.4"
   },
   "devDependencies": {
     "@web/test-runner": "^0.20.2",

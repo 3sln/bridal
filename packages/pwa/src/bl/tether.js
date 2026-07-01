@@ -16,6 +16,9 @@ import {
   listSessions as mkListSessions,
   connectSession as mkConnectSession,
   askReply as mkAskReply,
+  formReply as mkFormReply,
+  formFileBegin as mkFormFileBegin,
+  formFileEnd as mkFormFileEnd,
 } from '@bridle/protocol/link';
 import { offer as mkOffer } from '@bridle/protocol/signaling';
 import { parse as parseCommand, CMD } from './commands.js';
@@ -83,6 +86,7 @@ export class TetherQuery extends Query {
       statusLine: '', // transient agent status (set_status)
       toast: null, // { text, level } notice
       ask: null, // { id, question, choices } pending prompt
+      form: null, // { id, html, title, submit } agent-rendered form
       tethers: [], // known desktops/agents this phone can reach
       activeTetherId: null,
       tetherLabel: null,
@@ -366,6 +370,10 @@ export class TetherQuery extends Query {
           push({ ask: { id: msg.id, question: msg.question, choices: msg.choices } });
           if (settings.get('autoSpeak')) tts.speak(msg.question, { remember: false });
           break;
+        case LINK.FORM:
+          push({ form: { id: msg.id, html: msg.html, title: msg.title, submit: msg.submit } });
+          if (settings.get('autoSpeak')) tts.speak(msg.title ? `Form: ${msg.title}` : 'The agent sent you a form.', { remember: false });
+          break;
         case LINK.ASSET_BEGIN:
           incomingAsset = { ...msg, chunks: [], received: 0 };
           break;
@@ -407,6 +415,27 @@ export class TetherQuery extends Query {
     }
 
     const findSession = (list, id) => (list || []).find((s) => s.id === id) || (id ? { id, title: 'current' } : null);
+
+    // Submit a form: stream any files as binary (the desktop saves each to disk),
+    // then send the text values. Files never round-trip through the transcript.
+    const UPLOAD_CHUNK = 16 * 1024;
+    async function submitForm(id, values, files) {
+      push({ form: null });
+      addMessage('user', 'submitted a form', 'answer');
+      try {
+        for (const { field, file } of files || []) {
+          peer?.send(mkFormFileBegin(id, field, { name: file.name, mime: file.type, size: file.size }));
+          const buf = new Uint8Array(await file.arrayBuffer());
+          for (let o = 0; o < buf.length; o += UPLOAD_CHUNK) {
+            peer?.sendBinary(buf.subarray(o, o + UPLOAD_CHUNK));
+          }
+          peer?.send(mkFormFileEnd(id, field));
+        }
+      } catch (err) {
+        push({ error: `form upload failed: ${err.message}` });
+      }
+      peer?.send(mkFormReply(id, values || {}));
+    }
 
     // The phone decides: command or dictation.
     function onTranscript(heard) {
@@ -637,6 +666,17 @@ export class TetherQuery extends Query {
             push({ ask: null });
           }
           break;
+        case 'submit-form':
+          if (state.form && state.form.id === it.id) {
+            submitForm(it.id, it.values, it.files);
+          }
+          break;
+        case 'cancel-form':
+          if (state.form && state.form.id === it.id) {
+            peer?.send(mkFormReply(it.id, null));
+            push({ form: null });
+          }
+          break;
         case 'switch-tether':
           tethers.setActive(it.id);
           break;
@@ -779,6 +819,26 @@ export class AnswerAskAction extends Action {
   }
   execute(_, { engineFeed }) {
     emit(engineFeed, { type: 'answer-ask', answer: this.answer });
+  }
+}
+export class SubmitFormAction extends Action {
+  constructor({ id, values, files } = {}) {
+    super();
+    this.id = id;
+    this.values = values;
+    this.files = files;
+  }
+  execute(_, { engineFeed }) {
+    emit(engineFeed, { type: 'submit-form', id: this.id, values: this.values, files: this.files });
+  }
+}
+export class CancelFormAction extends Action {
+  constructor(id) {
+    super();
+    this.id = id;
+  }
+  execute(_, { engineFeed }) {
+    emit(engineFeed, { type: 'cancel-form', id: this.id });
   }
 }
 
