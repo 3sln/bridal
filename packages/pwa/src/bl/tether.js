@@ -117,20 +117,30 @@ export class TetherQuery extends Query {
     let flushTimer = null;
     let lastLevelNotify = 0;
 
-    // --- turn tracking ------------------------------------------------------
+    // --- turn tracking + delivery ------------------------------------------
     // A turn = from when we send input until the agent finishes replying. The
     // desktop marks it precisely with STATUS turn-start/turn-end; for agents that
     // don't, we fall back to "no output for TURN_IDLE_MS", with a hard cap so a
-    // silent turn can't wedge things. While a turn is in flight, anything the user
-    // says/types is held in `outQueue` (shown as queued) and sent as one combined
-    // message when the turn ends — so a mid-thought pause doesn't interleave.
+    // silent turn can't wedge things.
+    //
+    // Every user message carries a `delivery` the UI shows honestly:
+    //   pending — not on the wire yet (no live tether, or held for later)
+    //   sent    — handed to the open, verified data channel
+    //   read    — the agent picked it up (turn started / began replying)
+    // Two holding buffers keep messages from being lost or interleaved:
+    //   outbox   — composed while not linked; flushed when the tether is ready
+    //   outQueue — composed mid-turn; sent as one combined message at turn end
     const TURN_IDLE_MS = 2000;
     const TURN_MAX_MS = 120000;
     let explicitTurn = false; // desktop is sending turn-start/turn-end this turn
     let sawOutput = false; // first output chunk of the current turn arrived
     let idleTimer = null;
     let safetyTimer = null;
-    const outQueue = []; // [{ text, kind, msg }] held while the agent is busy
+    const outQueue = []; // message objects held while the agent is busy
+    const outbox = []; // message objects composed while not linked
+
+    // Ready to actually deliver: a live peer AND a verified link (post-HELLO).
+    const canDeliver = () => !!peer && state.connection === CONNECTION.TETHERED;
 
     function beginTurn() {
       explicitTurn = false;
@@ -155,7 +165,8 @@ export class TetherQuery extends Query {
       // bubbles were already shown (queued) and just lose the badge.
       const combined = flushQueue();
       if (combined) {
-        sendNow(combined);
+        peer?.send(mkText(combined));
+        beginTurn();
       } else {
         push({ awaitingReply: false });
       }
@@ -165,28 +176,61 @@ export class TetherQuery extends Query {
       clearTimeout(safetyTimer);
       idleTimer = safetyTimer = null;
       explicitTurn = false;
-      outQueue.length = 0;
+      // Whatever was queued for this turn is no longer on a live link — move it to
+      // the outbox (pending) so it resends when we're linked again, not lost.
+      for (const m of outQueue.splice(0)) {
+        m.queued = false;
+        m.delivery = 'pending';
+        outbox.push(m);
+      }
       push({ awaitingReply: false });
     }
 
-    function sendNow(text) {
-      peer?.send(mkText(text));
-      beginTurn();
-    }
-    // Send now if idle; otherwise hold for the next turn and mark it queued.
+    // Send now if we can and the agent is idle; otherwise hold it (pending) in the
+    // right buffer and reflect that on the message.
     function queueOrSend(text, kind) {
-      if (state.awaitingReply) {
-        const msg = addMessage('user', text, kind, { queued: true });
-        outQueue.push({ text, kind, msg });
+      if (!canDeliver()) {
+        outbox.push(addMessage('user', text, kind, { delivery: 'pending' }));
+      } else if (state.awaitingReply) {
+        outQueue.push(addMessage('user', text, kind, { delivery: 'pending', queued: true }));
       } else {
-        addMessage('user', text, kind);
-        sendNow(text);
+        addMessage('user', text, kind, { delivery: 'sent' });
+        peer?.send(mkText(text));
+        beginTurn();
       }
+    }
+    // The tether just became ready — send anything composed while it wasn't.
+    function flushOutbox() {
+      if (!outbox.length || !canDeliver()) return;
+      for (const m of outbox.splice(0)) {
+        m.queued = false;
+        if (state.awaitingReply) {
+          m.delivery = 'pending';
+          m.queued = true;
+          outQueue.push(m);
+        } else {
+          m.delivery = 'sent';
+          peer?.send(mkText(m.content));
+          beginTurn();
+        }
+      }
+      notifyNow();
+    }
+    // The agent picked up our input: promote delivered messages to "read".
+    function markRead() {
+      let changed = false;
+      for (const m of state.messages) {
+        if (m.role === 'user' && m.delivery === 'sent') {
+          m.delivery = 'read';
+          changed = true;
+        }
+      }
+      if (changed) notifyNow();
     }
     function flushQueue() {
       if (!outQueue.length) return '';
-      const combined = outQueue.map((q) => q.text).join('\n');
-      outQueue.forEach((q) => { if (q.msg) q.msg.queued = false; });
+      const combined = outQueue.map((q) => q.content).join('\n');
+      outQueue.forEach((m) => { m.queued = false; m.delivery = 'sent'; });
       outQueue.length = 0;
       return combined;
     }
@@ -324,9 +368,11 @@ export class TetherQuery extends Query {
       }
     }
     function onPeerOpen() {
-      push({ connection: CONNECTION.TETHERED, error: null });
-      // Wait for the host's HELLO (it carries the auth nonce) before replying
-      // with our signed device HELLO — see the LINK.HELLO handler.
+      // The data channel is open, but we're not "tethered" until the host's HELLO
+      // proves the desktop is there and this device is verified — stay in the
+      // linking state (see the LINK.HELLO handler) so the UI never shows a green
+      // "connected" that can't actually take a message.
+      push({ connection: CONNECTION.NEGOTIATING, error: null });
       updateNowPlaying();
       if (settings.get('conversationOnConnect') || settings.get('drivingMode')) startConversation();
     }
@@ -396,18 +442,20 @@ export class TetherQuery extends Query {
     function handleLink(msg) {
       switch (msg.t) {
         case LINK.HELLO: {
-          push({ agent: msg.agent || 'agent' });
+          push({ connection: CONNECTION.TETHERED, agent: msg.agent || 'agent', error: null });
           sendSignedHello(msg.nonce); // authenticate this device to the host
           // Give the active tether a friendly auto-label from the desktop.
           const base = (msg.cwd || '').split(/[\\/]/).filter(Boolean).pop();
           if (state.activeTetherId) tethers.setAutoLabel(state.activeTetherId, base ? `${msg.agent} · ${base}` : msg.agent);
           addMessage('system', `connected to ${msg.agent || 'agent'}`, 'status');
           updateNowPlaying();
+          flushOutbox(); // send anything composed while we were still linking
           break;
         }
         case LINK.OUTPUT:
           if (!sawOutput) {
             sawOutput = true;
+            markRead(); // the agent is replying, so it read our input
             earcon('done'); // the agent has started replying
           }
           armIdle(); // (no-op once the desktop is driving turn-start/turn-end)
@@ -416,6 +464,7 @@ export class TetherQuery extends Query {
           break;
         case LINK.STATUS:
           if (msg.state === 'turn-start') {
+            markRead(); // the agent picked up our input
             if (!state.awaitingReply) beginTurn();
             explicitTurn = true; // authoritative turn — disarm the idle heuristic
             clearTimeout(idleTimer);

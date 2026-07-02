@@ -90,6 +90,7 @@ export class SessionQuery extends Query {
     };
     let authed = false; // has the current peer proven its pinned device identity?
     let nonce = null; // per-connection challenge the guest must sign
+    let preAuth = []; // messages that arrived before auth finished — replayed on admit
     let pinnedFingerprint = await registry.getPin(config.room); // TOFU device pin
     let currentSessionId = null;
     const sessionTitles = new Map();
@@ -147,6 +148,7 @@ export class SessionQuery extends Query {
       frontend.detach();
       authed = false;
       nonce = null;
+      preAuth = [];
       if (peer) {
         try {
           peer.close();
@@ -185,7 +187,7 @@ export class SessionQuery extends Query {
     }
 
     // The guest passed the challenge: open the tether for real.
-    function admitGuest(guestName) {
+    async function admitGuest(guestName) {
       authed = true;
       push({ phase: PHASE.TETHERED, guest: guestName || 'phone' });
       if (outBuffer) {
@@ -196,7 +198,13 @@ export class SessionQuery extends Query {
       // First connect: start fresh (never silently resume an unrelated chat).
       // Reconnects: continue whatever session this tether was already on, so a
       // network blip doesn't drop you into a new conversation mid-task.
-      attachSession(currentSessionId || undefined);
+      await attachSession(currentSessionId || undefined);
+      // Replay anything the phone sent between HELLO and admission (e.g. an
+      // outbox flush) — it was held, not dropped, so no first message is lost.
+      const held = preAuth.splice(0);
+      for (const m of held) {
+        await handleLink(m);
+      }
     }
 
     // Verify the guest's signature over our nonce and enforce the device pin
@@ -240,8 +248,14 @@ export class SessionQuery extends Query {
     });
 
     async function handleLink(msg) {
-      // Until the device is verified, the only message we act on is its HELLO.
-      if (!authed && msg.t !== LINK.HELLO) return;
+      // Until the device is verified we act on nothing but its HELLO — but we hold
+      // (don't drop) the rest, capped against a flood, and replay it once admitted.
+      if (!authed && msg.t !== LINK.HELLO) {
+        if (preAuth.length < 32) {
+          preAuth.push(msg);
+        }
+        return;
+      }
       switch (msg.t) {
         case LINK.HELLO: {
           const ok = await verifyGuest(msg);
@@ -252,7 +266,7 @@ export class SessionQuery extends Query {
             push({ phase: PHASE.PEER_LEFT, guest: null });
             return;
           }
-          admitGuest(msg.client);
+          await admitGuest(msg.client);
           break;
         }
         case LINK.TEXT:

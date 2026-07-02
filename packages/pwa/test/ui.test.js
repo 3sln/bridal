@@ -89,3 +89,18 @@ test('messageList badges a message held for the next turn', async () => {
   expect(root.querySelector('.msg.queued')).toBeTruthy();
   expect(root.querySelector('.queued-tag')?.textContent).toContain('queued');
 });
+
+test('messageList shows honest delivery state on user messages', async () => {
+  const messageList = (await import('../src/ui/components/messageList.js')).default;
+  const root = mount(messageList([
+    { id: 'a', role: 'user', content: 'not delivered', delivery: 'pending' },
+    { id: 'b', role: 'user', content: 'on the wire', delivery: 'sent' },
+    { id: 'c', role: 'user', content: 'agent has it', delivery: 'read' },
+    { id: 'd', role: 'assistant', content: 'reply' },
+  ]));
+  expect(root.querySelector('.msg.user .delivery.pending')).toBeTruthy();
+  expect(root.querySelector('.msg.user .delivery.sent')).toBeTruthy();
+  expect(root.querySelector('.msg.user .delivery.read')).toBeTruthy();
+  // Assistant messages never get a delivery receipt.
+  expect(root.querySelector('.msg.assistant .delivery')).toBeFalsy();
+});

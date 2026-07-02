@@ -71,8 +71,10 @@ export default alias(function (state) {
     pointerleave: () => { clearTimeout(holdTimer); if (holding) { holding = false; suppressClick = true; fire('ptt-up'); } },
   });
 
-  const composer = div({ className: 'composer', 'data-mode': 'mic' },
-    input({ type: 'text', name: 'message', className: 'composer-input', placeholder: 'Message your agent…', enterkeyhint: 'send' }).on({
+  const linked = state.connection === 'tethered';
+  const placeholder = linked ? 'Message your agent…' : 'Not linked yet — messages send once connected';
+  const composer = div({ className: `composer ${linked ? '' : 'unlinked'}`.trim(), 'data-mode': 'mic' },
+    input({ type: 'text', name: 'message', className: 'composer-input', placeholder, enterkeyhint: 'send' }).on({
       $attach: (el) => { self._input = el; syncMode(); },
       input: syncMode,
       keydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } },
@@ -86,13 +88,20 @@ export default alias(function (state) {
   return div({ className: 'controls' }, composer);
 });
 
+const LINK_STATUS = { waiting: 'Waiting for desktop…', reconnecting: 'Reconnecting…', negotiating: 'Linking…', connecting: 'Connecting…' };
+
 function conversationBar(state, fire) {
-  const status = state.speaking ? 'Speaking…'
+  // A dropped/linking tether takes priority — don't imply we're listening to the
+  // agent when nothing's on the other end.
+  const linkMsg = state.connection !== 'tethered' && (LINK_STATUS[state.connection] || null);
+  const status = linkMsg ? linkMsg
+    : state.speaking ? 'Speaking…'
     : state.awaitingReply ? 'Thinking…'
     : state.processing ? 'Transcribing…'
     : state.listening ? 'Listening…'
     : 'Paused';
-  const phase = state.speaking ? 'speaking'
+  const phase = linkMsg ? 'linking'
+    : state.speaking ? 'speaking'
     : state.awaitingReply || state.processing ? 'thinking'
     : state.listening ? 'listening'
     : 'paused';

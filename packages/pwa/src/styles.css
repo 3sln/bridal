@@ -75,7 +75,7 @@ body {
 .status .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none; transition: background .3s, box-shadow .3s; }
 .status .dot.tethered { background: var(--green); box-shadow: 0 0 0 3px rgba(52, 211, 153, .18), 0 0 12px var(--green); }
 .status .dot.connecting, .status .dot.negotiating, .status .dot.reconnecting { background: var(--amber); box-shadow: 0 0 0 3px rgba(251, 191, 36, .15); animation: blink 1.2s ease-in-out infinite; }
-.status .dot.waiting { background: var(--accent); box-shadow: 0 0 0 3px rgba(124, 92, 255, .18); }
+.status .dot.waiting { background: var(--accent); box-shadow: 0 0 0 3px rgba(124, 92, 255, .18); animation: blink 1.6s ease-in-out infinite; }
 .status .dot.error { background: var(--red); }
 @keyframes blink { 50% { opacity: .35; } }
 
@@ -133,6 +133,11 @@ body {
 .msg.queued { opacity: .6; }
 .msg.queued .bubble { background: var(--grad); filter: saturate(.6) brightness(.85); box-shadow: none; }
 .msg .queued-tag { color: var(--amber); }
+/* Per-message delivery receipt (user messages). */
+.msg .delivery { align-self: flex-end; margin: 2px 4px 0 0; color: var(--faint); display: inline-flex; }
+.msg .delivery .msym { font-size: 14px; }
+.msg .delivery.pending { color: var(--amber); }
+.msg .delivery.read { color: var(--accent-2); }
 
 /* ---- mic meter --------------------------------------------------------- */
 .meter { height: 3px; background: transparent; margin: 0 16px; border-radius: 2px; overflow: hidden; opacity: 0; transition: opacity .25s; }
@@ -151,6 +156,8 @@ body {
   -webkit-backdrop-filter: blur(14px);
 }
 .composer { display: flex; align-items: flex-end; gap: 9px; }
+.composer.unlinked .composer-input { border-color: rgba(124, 92, 255, .4); }
+.composer.unlinked .composer-input::placeholder { color: var(--accent-2); }
 .composer-input {
   flex: 1; min-height: 46px; padding: 12px 16px; border-radius: 23px;
   border: 1px solid var(--line); background: var(--bg-soft); color: var(--text);
@@ -196,8 +203,10 @@ body {
 .convo-bar.speaking .convo-orb { background: linear-gradient(135deg, #4ade80, #22b07d); box-shadow: 0 4px 16px rgba(52, 211, 153, .45); }
 .convo-bar.thinking .convo-orb { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
 .convo-bar.paused .convo-orb { background: var(--panel-2); color: var(--muted); box-shadow: none; }
+.convo-bar.linking .convo-orb { background: linear-gradient(135deg, #8b6bff, #6d4bff); box-shadow: 0 0 0 3px rgba(124, 92, 255, .18); animation: blink 1.6s ease-in-out infinite; }
 .convo-text { font-weight: 600; font-size: 15px; }
 .convo-bar.paused .convo-text { color: var(--muted); }
+.convo-bar.linking .convo-text { color: var(--accent-2); }
 .convo-controls { display: flex; align-items: center; gap: 4px; flex: none; }
 .icon-btn.round { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 50%; width: 42px; height: 42px; }
 .icon-btn.round:hover { background: var(--panel-2); }
