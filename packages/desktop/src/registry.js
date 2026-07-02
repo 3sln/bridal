@@ -1,9 +1,12 @@
-// Persistent registry of "setups" — named, daemonized tethers. Each setup
-// remembers its room code and agent command so the phone can reconnect anytime
-// and the service can run it headless on boot.
+// Persistent registry of tethers — named, server-run tethers. Each remembers its
+// room code and agent command so the phone can reconnect anytime and the single
+// `bridle server` can run it headless. Stored as `tethers.json` under the OS
+// config dir (migrated from the legacy per-tether `setups.json`). Secrets go in a
+// sibling per-tether env file with tight permissions, never in the JSON.
 //
-// Stored as JSON under the OS config dir. Secrets (the OpenAI key) go in a
-// sibling per-setup env file with tight permissions, never in the JSON.
+// The server writes `status.json` (live per-tether state) so the CLI can show
+// real status without talking to the process. One `server.pid` lock guards the
+// single supervisor.
 
 import { mkdir, readFile, writeFile, rm, chmod } from 'node:fs/promises';
 import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
@@ -17,7 +20,9 @@ export function configDir() {
   return join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'bridle');
 }
 
-const setupsFile = () => join(configDir(), 'setups.json');
+const tethersFile = () => join(configDir(), 'tethers.json');
+const legacySetupsFile = () => join(configDir(), 'setups.json');
+const statusFile = () => join(configDir(), 'status.json');
 export const envFileFor = (name) => join(configDir(), `${safeName(name)}.env`);
 
 export function safeName(name) {
@@ -33,11 +38,29 @@ async function ensureDir() {
 
 export async function readSetups() {
   try {
-    const raw = await readFile(setupsFile(), 'utf8');
-    return JSON.parse(raw);
+    return JSON.parse(await readFile(tethersFile(), 'utf8'));
   } catch {
-    return {};
+    // First run on the shared-server build: adopt the legacy per-tether file.
+    try {
+      const legacy = JSON.parse(await readFile(legacySetupsFile(), 'utf8'));
+      await writeFile(tethersFile(), JSON.stringify(legacy, null, 2)).catch(() => {});
+      return legacy;
+    } catch {
+      return {};
+    }
   }
+}
+
+/** Sync read for hot paths (server watch/status) that can't await. */
+export function readSetupsSync() {
+  for (const f of [tethersFile(), legacySetupsFile()]) {
+    try {
+      return JSON.parse(readFileSync(f, 'utf8'));
+    } catch {
+      /* try the next */
+    }
+  }
+  return {};
 }
 
 export async function getSetup(name) {
@@ -62,7 +85,7 @@ export async function saveSetup(setup) {
     }
   }
   all[key] = { ...all[key], ...setup, name: key, cwd: setup.cwd ?? all[key]?.cwd };
-  await writeFile(setupsFile(), JSON.stringify(all, null, 2));
+  await writeFile(tethersFile(), JSON.stringify(all, null, 2));
   return all[key];
 }
 
@@ -72,7 +95,7 @@ export async function removeSetup(name) {
   if (!all[key]) return false;
   const room = all[key].room;
   delete all[key];
-  await writeFile(setupsFile(), JSON.stringify(all, null, 2));
+  await writeFile(tethersFile(), JSON.stringify(all, null, 2));
   if (room) {
     await removePin(room).catch(() => {});
   }
@@ -181,5 +204,76 @@ export function releaseDaemonLock(name) {
     }
   } catch {
     /* nothing to release */
+  }
+}
+
+/** Migration: stop a still-running legacy per-tether daemon and clear its lock. */
+export function stopLegacyDaemon(name) {
+  try {
+    const pid = Number(readFileSync(lockFile(name), 'utf8').trim());
+    if (pidAlive(pid)) {
+      try {
+        process.kill(pid);
+      } catch {
+        /* already gone / not ours */
+      }
+    }
+    rmSync(lockFile(name), { force: true });
+  } catch {
+    /* no legacy lock */
+  }
+}
+
+// --- shared server: single-instance lock ------------------------------------
+// Exactly one `bridle server` supervises all tethers. Its PID file is the lock;
+// a stale file (dead PID) is ignored so a crash never wedges the whole system.
+const serverLockFile = () => join(configDir(), 'server.pid');
+
+export function serverRunning() {
+  try {
+    return pidAlive(Number(readFileSync(serverLockFile(), 'utf8').trim()));
+  } catch {
+    return false;
+  }
+}
+export function acquireServerLock() {
+  if (serverRunning()) return false;
+  try {
+    mkdirSync(configDir(), { recursive: true });
+    writeFileSync(serverLockFile(), String(process.pid));
+    return true;
+  } catch {
+    return true;
+  }
+}
+export function releaseServerLock() {
+  try {
+    if (Number(readFileSync(serverLockFile(), 'utf8').trim()) === process.pid) {
+      rmSync(serverLockFile(), { force: true });
+    }
+  } catch {
+    /* nothing to release */
+  }
+}
+
+// --- live status (server -> CLI) --------------------------------------------
+// The server writes a map of tether name -> { phase, guest, agentState, at }.
+// The CLI reads it to show real state; entries older than STATUS_STALE_MS mean
+// the server isn't updating that tether (treated as not live).
+export const STATUS_STALE_MS = 15000;
+
+export function writeStatus(map) {
+  try {
+    mkdirSync(configDir(), { recursive: true });
+    writeFileSync(statusFile(), JSON.stringify(map, null, 2));
+  } catch {
+    /* status is best-effort */
+  }
+}
+export function readStatusSync() {
+  try {
+    return JSON.parse(readFileSync(statusFile(), 'utf8'));
+  } catch {
+    return {};
   }
 }

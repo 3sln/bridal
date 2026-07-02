@@ -1,12 +1,14 @@
 #!/usr/bin/env bun
 // Bridle desktop CLI dispatcher. Subcommands:
-//   tether <name> [agent] | daemonize [name] | list | remove <name>
-//   daemon --setup <name> (internal) | help
+//   tether <name> [agent] | daemonize | list | remove <name>
+//   server (the shared supervisor) | daemon --setup <name> (legacy) | help
+//
+// All tethers are run by ONE shared `bridle server`; `tether` registers a tether
+// (tethers.json) and makes sure the server is running, then shows the QR.
 //
 // Compile to a single binary with:  bun build src/index.js --compile --outfile bridle
 
 import { readFile } from 'node:fs/promises';
-import { basename } from 'node:path';
 import { Engine, Provider } from '@3sln/ngin';
 import { parseArgs, loadConfig, configFromSetup } from './config.js';
 import {
@@ -18,9 +20,10 @@ import {
   FrontendProvider,
 } from './providers.js';
 import { SetupsQuery, RemoveSetupAction } from './bl/setups.js';
-import { getSetup, envFileFor, acquireDaemonLock, releaseDaemonLock } from './registry.js';
-import { installService } from './service.js';
+import { getSetup, saveSetup, readSetups, envFileFor, acquireDaemonLock, releaseDaemonLock, serverRunning } from './registry.js';
+import { installServerService, startBackgroundServer, migrateLegacyServices } from './service.js';
 import { runSession } from './run.js';
+import { runServer } from './server.js';
 import { terminalQR, openWebviewQR } from './qr.js';
 import { ui } from './ui.js';
 
@@ -52,7 +55,10 @@ switch (parsed.sub) {
     await cmdPair();
     break;
   case 'daemonize':
-    await cmdDaemonize(parsed.tetherName);
+    await cmdDaemonize();
+    break;
+  case 'server':
+    await cmdServer();
     break;
   case 'daemon':
     await cmdDaemon(parsed.get('--setup'));
@@ -65,7 +71,7 @@ switch (parsed.sub) {
     break;
 }
 
-// --- pair: foreground run, QR, auto-daemonize on first tether ---------------
+// --- tether: register the tether, ensure the server runs, show the QR --------
 async function cmdPair() {
   const config = loadConfig(parsed);
   if (!config.agent) {
@@ -76,36 +82,70 @@ async function cmdPair() {
   if (modeName && !modes?.[modeName]) {
     fail(`unknown mode "${modeName}" for ${config.agent.id}. available: ${Object.keys(modes || {}).join(', ') || '(none)'}`);
   }
-  const engine = buildEngine(config);
+
+  // Re-tethering the same directory keeps its existing room (so an already-scanned
+  // QR still works), unless a token was pinned explicitly with --room.
+  const prior = await getSetup(config.name);
+  if (prior?.room && !parsed.get('--room') && (!prior.cwd || prior.cwd === config.agent.cwd)) {
+    config.room = prior.room;
+    config.pwaUrl = `${config.backendUrl}/app/#room=${config.room}`;
+  }
+
+  const saved = await saveSetup({
+    name: config.name,
+    room: config.room,
+    agent: { id: config.agent.id, command: config.agent.command, mode: modeName || null },
+    cwd: config.agent.cwd,
+    backendUrl: config.backendUrl,
+    createdAt: prior?.createdAt || new Date().toISOString(),
+  });
+
+  const ensured = config.autoDaemon ? await ensureServer() : { how: 'skipped' };
+
   await ui.banner(config, terminalQR);
   if (config.webview) {
     openWebviewQR(config.pwaUrl).then((ok) => !ok && ui.note('(webview unavailable — using terminal QR)'));
   }
-  const { reason, already } = await runSession(engine, config, { ui });
-  if (reason === 'daemonized') ui.handedOff();
-  else if (reason === 'fallback-daemon') ui.fallbackDaemon(already, config.name);
-  await engine.dispose();
+  ui.tetherAdded(saved, ensured);
   process.exit(0);
 }
 
-// --- daemonize: register the persistent service for an existing tether -------
-// Meant to be run from a console opened as administrator (where a locked-down
-// machine will let the task be registered). Falls back to a clear message when
-// it isn't elevated.
-async function cmdDaemonize(name) {
-  name = name || basename(process.cwd());
-  const setup = await getSetup(name);
-  if (!setup) {
-    fail(`no tether named "${name}". create one first:  bridle tether ${name} <agent>`);
-  }
+// Make sure exactly one shared server is running. Prefer the persistent OS
+// service (also migrating away any legacy per-tether services); if that's blocked
+// (locked-down machine, no elevation), fall back to a transient background server.
+async function ensureServer() {
+  if (serverRunning()) return { how: 'already' };
   try {
-    const svc = await installService(setup.name);
-    ui.installed({ setup, service: svc });
-    ui.note('daemonized — this tether will keep running across logins.');
+    const svc = await installServerService();
+    await migrateLegacyServices(Object.keys(await readSetups())).catch(() => {});
+    return { how: 'service', svc };
   } catch (err) {
-    fail(`couldn't register the background service: ${err.message}\n  open PowerShell as administrator, then run:  bridle daemonize ${name}`);
+    const { already } = await startBackgroundServer().catch(() => ({ already: false, failed: true }));
+    return { how: 'background', already, err };
+  }
+}
+
+// --- daemonize: install the persistent shared-server service -----------------
+// Meant to be run from a console opened as administrator (where a locked-down
+// machine will let the task be registered). Falls back to a clear message.
+async function cmdDaemonize() {
+  try {
+    const svc = await installServerService();
+    await migrateLegacyServices(Object.keys(await readSetups())).catch(() => {});
+    ui.serverInstalled(svc);
+  } catch (err) {
+    fail(`couldn't register the bridle server service: ${err.message}\n  open PowerShell as administrator, then run:  bridle daemonize`);
+  }
+  if (!serverRunning()) {
+    await startBackgroundServer().catch(() => {});
   }
   await new Promise((r) => setTimeout(r, 200));
+  process.exit(0);
+}
+
+// --- server: the shared supervisor (runs every tether) ----------------------
+async function cmdServer() {
+  await runServer(buildEngine, { ui: ui.quiet });
   process.exit(0);
 }
 

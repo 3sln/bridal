@@ -1,23 +1,27 @@
-// Cross-platform "always available" service manager. One OS service per setup,
-// each running `bridle daemon --setup <name>` at login/boot and restarting on
+// Cross-platform "always available" service manager. ONE OS service — the shared
+// `bridle server` — runs at login/boot and supervises every tether, restarting on
 // failure. Three adapters behind one interface:
 //
 //   macOS    -> launchd LaunchAgent  (~/Library/LaunchAgents)
 //   Linux    -> systemd user unit    (~/.config/systemd/user)
 //   Windows  -> Scheduled Task       (schtasks, ONLOGON)
 //
-// Kept deliberately dependency-free (shells out to the native tool). The session
-// logic never touches this — it's reached through the ServiceProvider, so a new
-// OS or a different init system is a new adapter, not a rewrite.
+// Each adapter is parameterized by a job {key, args}: `key` names the service,
+// `args` is the bridle command tail it runs. The server is {key:'server', args:
+// ['server']}; the same adapters also uninstall the legacy per-tether services
+// (key = the tether name) during migration. Kept dependency-free (shells out to
+// the native tool); reached through the ServiceProvider so a new init system is a
+// new adapter, not a rewrite.
 
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { safeName, envFileFor, daemonRunning } from './registry.js';
+import { safeName, serverRunning, stopLegacyDaemon } from './registry.js';
 
-const LABEL = (name) => `com.3sln.bridle.${safeName(name)}`;
-const UNIT = (name) => `bridle-${safeName(name)}.service`;
-const TASK = (name) => `Bridle_${safeName(name)}`;
+const SERVER_KEY = 'server';
+const LABEL = (key) => `com.3sln.bridle.${key}`;
+const UNIT = (key) => `bridle-${key}.service`;
+const TASK = (key) => `Bridle_${key}`;
 
 /** How to invoke *this* bridle build (compiled binary, or `bun index.js` in dev). */
 export function selfCommand() {
@@ -41,33 +45,31 @@ export function platformName() {
   return { darwin: 'launchd', linux: 'systemd', win32: 'task-scheduler' }[process.platform] || process.platform;
 }
 
-export async function installService(name) {
-  const adapter = pick();
-  return adapter.install(name);
+// --- the shared server service ----------------------------------------------
+export async function installServerService() {
+  return pick().install(SERVER_KEY, ['server']);
 }
-export async function uninstallService(name) {
-  const adapter = pick();
-  return adapter.uninstall(name);
+export async function uninstallServerService() {
+  return pick().uninstall(SERVER_KEY);
 }
-export async function serviceStatus(name) {
-  const adapter = pick();
+export async function serverServiceStatus() {
   try {
-    return await adapter.status(name);
+    return await pick().status(SERVER_KEY);
   } catch {
     return 'unknown';
   }
 }
 
 /**
- * Fallback when a persistent service can't be installed: launch a *detached*
- * background daemon for this tether, unless one is already running. It survives
- * this process exiting but is transient — it won't come back after logout/reboot
- * (that's what the real service is for). One per tether, guarded by the lock.
+ * Fallback when the persistent service can't be installed: launch a *detached*
+ * `bridle server`, unless one is already running. It survives this process
+ * exiting but is transient — it won't come back after logout/reboot (that's what
+ * the real service is for). Guarded by the single server lock.
  */
-export async function startBackgroundDaemon(name) {
-  if (daemonRunning(safeName(name))) return { already: true };
+export async function startBackgroundServer() {
+  if (serverRunning()) return { already: true };
   const { exec, prefix } = selfCommand();
-  const args = [...prefix, 'daemon', '--setup', safeName(name)];
+  const args = [...prefix, 'server'];
   if (process.platform === 'win32') {
     // Start-Process fully detaches the child from us (Bun children can be tied to
     // our lifetime otherwise).
@@ -82,6 +84,22 @@ export async function startBackgroundDaemon(name) {
     child.unref?.();
   }
   return { already: false };
+}
+
+/**
+ * One-time upgrade cleanup: remove the old per-tether OS services and stop their
+ * daemons, so the single server owns every tether. Best-effort — a leftover we
+ * can't reach just idles until reboot. `names` are the safe keys of the tethers
+ * that used to each have their own service.
+ */
+export async function migrateLegacyServices(names) {
+  const adapter = pick();
+  for (const name of names) {
+    const key = safeName(name);
+    if (key === SERVER_KEY) continue;
+    await adapter.uninstall(key).catch(() => {});
+    stopLegacyDaemon(key); // kill any still-running per-tether daemon + clear its lock
+  }
 }
 
 function pick() {
@@ -100,26 +118,23 @@ function pick() {
 
 // --- launchd (macOS) --------------------------------------------------------
 const launchd = {
-  plistPath: (name) => join(homedir(), 'Library', 'LaunchAgents', `${LABEL(name)}.plist`),
-  async install(name) {
+  plistPath: (key) => join(homedir(), 'Library', 'LaunchAgents', `${LABEL(key)}.plist`),
+  async install(key, tail) {
     const { exec, prefix } = selfCommand();
-    const args = [...prefix, 'daemon', '--setup', safeName(name)];
+    const args = [...prefix, ...tail];
     const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>${LABEL(name)}</string>
+  <key>Label</key><string>${LABEL(key)}</string>
   <key>ProgramArguments</key><array>
     ${[exec, ...args].map((a) => `<string>${xml(a)}</string>`).join('\n    ')}
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
-  <key>EnvironmentVariables</key><dict>
-    <key>BRIDLE_ENV_FILE</key><string>${xml(envFileFor(name))}</string>
-  </dict>
-  <key>StandardOutPath</key><string>${xml(join(homedir(), 'Library', 'Logs', `${LABEL(name)}.log`))}</string>
-  <key>StandardErrorPath</key><string>${xml(join(homedir(), 'Library', 'Logs', `${LABEL(name)}.log`))}</string>
+  <key>StandardOutPath</key><string>${xml(join(homedir(), 'Library', 'Logs', `${LABEL(key)}.log`))}</string>
+  <key>StandardErrorPath</key><string>${xml(join(homedir(), 'Library', 'Logs', `${LABEL(key)}.log`))}</string>
 </dict></plist>`;
-    const path = this.plistPath(name);
+    const path = this.plistPath(key);
     await mkdir(join(homedir(), 'Library', 'LaunchAgents'), { recursive: true });
     await writeFile(path, plist);
     await run('launchctl', ['unload', path]).catch(() => {});
@@ -127,36 +142,35 @@ const launchd = {
     if (code !== 0) throw new Error(`launchctl load failed: ${err}`);
     return { manager: 'launchd', path };
   },
-  async uninstall(name) {
-    const path = this.plistPath(name);
+  async uninstall(key) {
+    const path = this.plistPath(key);
     await run('launchctl', ['unload', '-w', path]).catch(() => {});
     await rm(path, { force: true });
     return true;
   },
-  async status(name) {
+  async status(key) {
     const { out } = await run('launchctl', ['list']);
-    return out.includes(LABEL(name)) ? 'active' : 'inactive';
+    return out.includes(LABEL(key)) ? 'active' : 'inactive';
   },
 };
 
 // --- systemd (Linux, user scope) --------------------------------------------
 const systemd = {
   unitDir: () => join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'systemd', 'user'),
-  unitPath(name) {
-    return join(this.unitDir(), UNIT(name));
+  unitPath(key) {
+    return join(this.unitDir(), UNIT(key));
   },
-  async install(name) {
+  async install(key, tail) {
     const { exec, prefix } = selfCommand();
-    const execStart = [exec, ...prefix, 'daemon', '--setup', safeName(name)].map(shellQuote).join(' ');
+    const execStart = [exec, ...prefix, ...tail].map(shellQuote).join(' ');
     const unit = `[Unit]
-Description=Bridle tether (${safeName(name)})
+Description=Bridle server (all tethers)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStart=${execStart}
-EnvironmentFile=-${envFileFor(name)}
 Restart=on-failure
 RestartSec=3
 
@@ -164,22 +178,22 @@ RestartSec=3
 WantedBy=default.target
 `;
     await mkdir(this.unitDir(), { recursive: true });
-    await writeFile(this.unitPath(name), unit);
+    await writeFile(this.unitPath(key), unit);
     await run('systemctl', ['--user', 'daemon-reload']);
     // Allow the service to run without an active login session (best effort).
     await run('loginctl', ['enable-linger', process.env.USER || '']).catch(() => {});
-    const { code, err } = await run('systemctl', ['--user', 'enable', '--now', UNIT(name)]);
+    const { code, err } = await run('systemctl', ['--user', 'enable', '--now', UNIT(key)]);
     if (code !== 0) throw new Error(`systemctl enable failed: ${err}`);
-    return { manager: 'systemd', path: this.unitPath(name) };
+    return { manager: 'systemd', path: this.unitPath(key) };
   },
-  async uninstall(name) {
-    await run('systemctl', ['--user', 'disable', '--now', UNIT(name)]).catch(() => {});
-    await rm(this.unitPath(name), { force: true });
+  async uninstall(key) {
+    await run('systemctl', ['--user', 'disable', '--now', UNIT(key)]).catch(() => {});
+    await rm(this.unitPath(key), { force: true });
     await run('systemctl', ['--user', 'daemon-reload']);
     return true;
   },
-  async status(name) {
-    const { out } = await run('systemctl', ['--user', 'is-active', UNIT(name)]);
+  async status(key) {
+    const { out } = await run('systemctl', ['--user', 'is-active', UNIT(key)]);
     return out.trim() === 'active' ? 'active' : 'inactive';
   },
 };
@@ -192,10 +206,10 @@ WantedBy=default.target
 // where this same install runs elevated and succeeds. The task itself always
 // runs with a LIMITED token, so the agent never runs as admin.
 const taskScheduler = {
-  async install(name) {
-    const task = TASK(name);
+  async install(key, tail) {
+    const task = TASK(key);
     const { exec, prefix } = selfCommand();
-    const tr = winCmdLine([exec, ...prefix, 'daemon', '--setup', safeName(name)]);
+    const tr = winCmdLine([exec, ...prefix, ...tail]);
     const created = await run('schtasks', [
       '/Create', '/TN', task, '/TR', tr, '/SC', 'ONLOGON', '/RL', 'LIMITED', '/F',
     ]);
@@ -203,16 +217,17 @@ const taskScheduler = {
       throw new Error(created.err.trim() || 'schtasks create failed (access denied)');
     }
     // ONLOGON only registers it for future logins — start it now too, or the
-    // tether stays dark (phone stuck "waiting for desktop") until the next logon.
+    // tethers stay dark (phone stuck "waiting for desktop") until the next logon.
     await run('schtasks', ['/Run', '/TN', task]).catch(() => {});
     return { manager: 'task-scheduler', path: task };
   },
-  async uninstall(name) {
-    await run('schtasks', ['/Delete', '/TN', TASK(name), '/F']).catch(() => {});
+  async uninstall(key) {
+    await run('schtasks', ['/End', '/TN', TASK(key)]).catch(() => {});
+    await run('schtasks', ['/Delete', '/TN', TASK(key), '/F']).catch(() => {});
     return true;
   },
-  async status(name) {
-    const { code, out } = await run('schtasks', ['/Query', '/TN', TASK(name)]);
+  async status(key) {
+    const { code, out } = await run('schtasks', ['/Query', '/TN', TASK(key)]);
     if (code !== 0) return 'inactive';
     return /Running|Ready/i.test(out) ? 'active' : 'inactive';
   },

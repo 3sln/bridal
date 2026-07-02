@@ -26,7 +26,6 @@ export const ui = {
     console.log(`  room     ${c.bold(config.room)}`);
     console.log(`  agent    ${config.agent.label}${config.agent.modeName ? c.cyan(` · ${config.agent.modeName} mode`) : ''} ${c.dim(`(${config.agent.mode}, ${config.agent.tier})`)}`);
     console.log(c.dim(`  session  ${config.session.fresh ? 'new' : config.session.id || 'resume latest'} — primed for voice on connect`));
-    console.log(`  daemon   ${config.autoDaemon ? `auto (${platformName()}) after first tether` : 'off (--no-daemon)'}`);
     console.log(c.dim('  voice    on-device (browser Whisper) — no API key needed'));
     console.log('');
   },
@@ -46,39 +45,54 @@ export const ui = {
   guestInput({ text }) {
     console.log(`\n${c.cyan('📱 you:')} ${text}`);
   },
-  installed({ setup, service }) {
-    console.log(c.green(`✓ installed daemon "${setup.name}" via ${service.manager}`));
-    console.log(c.dim(`  ${service.path}`));
-  },
   removed({ name, removed }) {
-    console.log(removed ? c.green(`✓ removed "${name}"`) : c.yellow(`· no setup named "${name}"`));
+    console.log(removed ? c.green(`✓ removed "${name}"`) : c.yellow(`· no tether named "${name}"`));
   },
-  handedOff() {
-    console.log(c.green('✓ handed off to the background service — it will keep this tether alive.'));
-    console.log(c.dim('  manage it with:  bridle list   /   bridle remove <name>'));
+  // After `bridle tether`: report how the shared server is handling it.
+  tetherAdded(setup, ensured) {
+    switch (ensured.how) {
+      case 'already':
+        console.log(c.green('✓ added to the running bridle server — scan the QR to connect.'));
+        break;
+      case 'service':
+        console.log(c.green(`✓ added, and installed the bridle server service (${ensured.svc?.manager || platformName()}).`));
+        break;
+      case 'background':
+        console.log(ensured.already
+          ? c.green('✓ added to the background bridle server — scan the QR to connect.')
+          : c.green('✓ added, and started a background bridle server — scan the QR to connect.'));
+        console.log(c.dim('  the background server stops on logout/reboot. to keep it across logins,'));
+        console.log(`  open ${c.bold('PowerShell as administrator')} and run  ${c.cyan('bridle daemonize')}`);
+        break;
+      default: // skipped (--no-daemon)
+        console.log(c.yellow('· tether saved. start it with  bridle server  (or  bridle daemonize  to persist).'));
+    }
+    console.log(c.dim(`  manage:  bridle list   /   bridle remove ${setup.name}`));
   },
-  fallbackDaemon(already, name) {
-    console.log(already
-      ? c.green('✓ a background server for this tether is already running — your phone stays connected.')
-      : c.green('✓ started a background server for this tether — your phone stays connected.'));
-    console.log(c.dim("  it's not permanent yet (stops when you log out or reboot)."));
-    console.log(`  to keep it running across logins, open ${c.bold('PowerShell as administrator')} and run:`);
-    console.log(`      ${c.cyan(`bridle daemonize ${name || ''}`.trim())}`);
+  serverInstalled(svc) {
+    console.log(c.green(`✓ installed the bridle server service via ${svc.manager}`));
+    console.log(c.dim(`  ${svc.path}`));
+    console.log(c.dim('  it now runs every tether across logins.'));
   },
   setups(list) {
     if (!list.length) {
       console.log(c.dim('\n  no tethers yet — create one with:  bridle tether <name> <agent>\n'));
       return;
     }
+    const svc = list[0].service;
+    const serverUp = list[0].serverRunning;
+    const serverState = serverUp
+      ? c.green(svc === 'active' ? 'running · service' : 'running · background')
+      : svc === 'active'
+        ? c.yellow('registered · not running')
+        : c.dim('not running — run  bridle daemonize');
+    console.log(`\n  ${c.bold('bridle server')}  ${serverState}`);
     console.log(c.bold('\n  tethers\n'));
     for (const s of list) {
-      const daemonized = s.service === 'active'; // a persistent service is registered
-      const state = s.running
-        ? c.green(daemonized ? 'running · daemonized' : 'running · background')
-        : daemonized
-          ? c.yellow('stopped · daemonized')
-          : c.dim('stopped');
       const dot = s.running ? c.green('●') : c.dim('○');
+      const state = s.running
+        ? c.green(phaseWord(s.phase) + (s.guest ? c.dim(` · ${s.guest}`) : ''))
+        : c.dim('idle');
       console.log(`  ${dot} ${c.bold(s.name.padEnd(16))} ${state}   ${c.dim(agentLabel(s.agent))}`);
       if (s.cwd) {
         console.log(`    ${c.dim(s.cwd)}`);
@@ -99,11 +113,13 @@ export const ui = {
 ${c.bold('usage')}
   bridle tether <name> [agent]           create a tether + pair your phone (scan the QR)
   bridle tether <name> -- <cmd...>        …tethering an arbitrary CLI instead of a profile
-  bridle daemonize [name]                 keep a tether running across logins
+  bridle daemonize                        keep the bridle server running across logins
                                           ${c.dim('(run from PowerShell opened as administrator)')}
   bridle list                            list your tethers + status
   bridle remove <name>                   stop + remove a tether
   bridle help                            show this help
+
+  ${c.dim('all tethers are run by one shared `bridle server`; new tethers join it live.')}
 
 ${c.bold('agents')}  ${listProfiles().map((p) => p.aliases[0]).join('  ')}
   ${c.dim('use `-- <cmd...>` to tether any other CLI, or define your own profiles')}
@@ -132,13 +148,25 @@ ui.quiet = {
   note: (msg) => console.log(`[bridle] ${msg}`),
   agentOutput: () => {},
   guestInput: () => {},
-  installed: () => {},
   removed: () => {},
-  handedOff: () => {},
-  fallbackDaemon: () => {},
+  tetherAdded: () => {},
+  serverInstalled: () => {},
   setups: () => {},
   help: () => {},
 };
+
+// Short status word for `bridle list`.
+function phaseWord(phase) {
+  switch (phase) {
+    case PHASE.TETHERED: return 'connected';
+    case PHASE.WAITING: return 'waiting for phone';
+    case PHASE.NEGOTIATING: return 'linking';
+    case PHASE.PEER_LEFT: return 'phone left';
+    case PHASE.STARTING: return 'starting';
+    case PHASE.ERROR: return 'error';
+    default: return phase || 'live';
+  }
+}
 
 function phaseLabel(s) {
   switch (s.phase) {

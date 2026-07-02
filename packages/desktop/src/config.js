@@ -40,7 +40,7 @@ import { DEFAULT_ICE_SERVERS, STUN_SERVERS } from '@bridle/protocol/ice';
 import { resolveAgent } from './agents.js';
 
 const DEFAULT_BACKEND = 'https://bridle.3sln.com';
-export const KNOWN_SUBS = new Set(['tether', 'daemonize', 'list', 'remove', 'rm', 'daemon', 'help']);
+export const KNOWN_SUBS = new Set(['tether', 'daemonize', 'list', 'remove', 'rm', 'daemon', 'server', 'help']);
 
 export function parseArgs(argv = process.argv.slice(2)) {
   const dashDash = argv.indexOf('--');

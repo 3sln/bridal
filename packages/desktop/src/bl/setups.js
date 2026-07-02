@@ -1,53 +1,50 @@
-// Business logic for daemonized setups: install, remove, list. These are the
-// ngin verbs/nouns the CLI dispatches; the registry + service providers do the
-// platform work. Auto-install-after-first-tether dispatches InstallSetupAction.
+// Business logic for tethers: remove + list. The registry holds tethers.json and
+// the shared server's status.json; the CLI reads both. Creating/running a tether
+// no longer installs anything per-tether — `bridle tether` writes the registry and
+// the single server picks it up (see index.js / server.js).
 
 import { Action, Query } from '@3sln/ngin';
 
-/** Persist a setup and register an OS service for it. No secrets to store —
- *  STT/TTS run on the phone, so the daemon needs no API keys. */
-export class InstallSetupAction extends Action {
-  static deps = ['registry', 'service'];
-  /** @param {{name,room,agent,cwd,backendUrl,createdAt?}} setup */
-  constructor(setup) {
-    super();
-    this.setup = setup;
-  }
-  async execute({ registry, service }, { dispatchFeed }) {
-    const saved = await registry.saveSetup({ ...this.setup, createdAt: this.setup.createdAt || null });
-    const svc = await service.installService(saved.name);
-    dispatchFeed.dispatchEvent(new CustomEvent('installed', { detail: { setup: saved, service: svc } }));
-  }
-}
-
-/** Stop + remove a setup's service and registry entry. */
+/** Remove a tether from the registry. The running server notices the change and
+ *  tears its session down; there's no per-tether service to uninstall. */
 export class RemoveSetupAction extends Action {
-  static deps = ['registry', 'service'];
+  static deps = ['registry'];
   constructor(name) {
     super();
     this.name = name;
   }
-  async execute({ registry, service }, { dispatchFeed }) {
-    await service.uninstallService(this.name);
+  async execute({ registry }, { dispatchFeed }) {
     const removed = await registry.removeSetup(this.name);
     dispatchFeed.dispatchEvent(new CustomEvent('removed', { detail: { name: this.name, removed } }));
   }
 }
 
-/** List setups with their live status: whether a daemon is running (the lock),
- *  and whether a persistent service is registered (daemonized). */
+/** List tethers with live status: whether the shared server is running, whether
+ *  it's persistent (service registered), and each tether's live phase/guest as
+ *  reported in status.json. */
 export class SetupsQuery extends Query {
   static deps = ['registry', 'service'];
   async boot({ registry, service }, { notify }) {
     const all = await registry.readSetups();
-    const list = await Promise.all(
-      Object.values(all).map(async (s) => ({
+    const svc = await service.serverServiceStatus(); // 'active' == the server service is registered
+    const serverUp = registry.serverRunning();
+    const status = registry.readStatusSync();
+    const now = Date.now();
+    const list = Object.values(all).map((s) => {
+      const live = status[s.name];
+      // Only trust status.json while the server is actually up — otherwise a
+      // just-killed server leaves stale entries that would read as "live".
+      const fresh = serverUp && !!live && now - (live.at || 0) < registry.STATUS_STALE_MS;
+      return {
         ...s,
-        service: await service.serviceStatus(s.name), // 'active' == a task/unit is registered
-        running: registry.daemonRunning(s.name), // a live daemon holds this tether's lock
+        service: svc,
+        serverRunning: serverUp,
+        running: fresh, // the server currently has a live session for this tether
+        phase: fresh ? live.phase : null,
+        guest: fresh ? live.guest : null,
         manager: service.platformName(),
-      })),
-    );
+      };
+    });
     notify(list);
   }
 }
